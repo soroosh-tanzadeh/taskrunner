@@ -1,31 +1,25 @@
 package contracts
 
 type Message struct {
-	queue        string
-	id           string
-	payload      string
+	ID           string
+	Payload      string
 	receiveCount int64
 }
 
-func NewMessage(id, queue, payload string, receiveCount int64) Message {
+func NewMessage(id, payload string, receiveCount int64) Message {
 	return Message{
-		id:           id,
-		payload:      payload,
-		queue:        queue,
+		ID:           id,
+		Payload:      payload,
 		receiveCount: receiveCount,
 	}
 }
 
-func (m Message) GetQueue() string {
-	return m.queue
-}
-
 func (m Message) GetId() string {
-	return m.id
+	return m.ID
 }
 
 func (m Message) GetPayload() string {
-	return m.payload
+	return m.Payload
 }
 
 func (m Message) GetReceiveCount() int64 {

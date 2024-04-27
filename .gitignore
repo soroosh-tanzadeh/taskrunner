@@ -1,3 +1,5 @@
 vendor
 .idea
 .vscode
+coverage.out
+.coverage
