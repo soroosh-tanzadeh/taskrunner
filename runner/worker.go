@@ -39,7 +39,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 	batchSize := t.cfg.BatchSize
 	consumerName := t.consumerName() + "_" + strconv.Itoa(workerID)
 
-	executeTask := func(ctx context.Context, task Task, payload any, resultChannel chan any) {
+	executeTask := func(ctx context.Context, task *Task, payload any, resultChannel chan any) {
 		// Close channel to prevent infinit for-loop
 		defer close(resultChannel)
 		// Handle Panic
@@ -147,7 +147,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 	})
 }
 
-func (t *TaskRunner) afterProcess(task Task, payload any) {
+func (t *TaskRunner) afterProcess(task *Task, payload any) {
 	if task.Unique {
 		err := t.releaseLock(task.lockKey(payload), task.lockValue)
 		if err != nil {

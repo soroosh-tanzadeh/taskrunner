@@ -47,7 +47,7 @@ func main() {
 		LongQueueThreshold: time.Second * 30,
 	}, rdb, queue)
 
-	taskRunner.RegisterTask(runner.Task{
+	taskRunner.RegisterTask(&runner.Task{
 		Name:     "exampletask",
 		MaxRetry: 10,
 		Action: func(ctx context.Context, payload any) error {
