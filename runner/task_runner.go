@@ -37,7 +37,7 @@ const metricsKeyPrefix = "taskrunner:"
 type TaskRunner struct {
 	status atomic.Uint64
 
-	tasks *safemap.SafeMap[string, Task]
+	tasks *safemap.SafeMap[string, *Task]
 
 	cfg TaskRunnerConfig
 
@@ -66,7 +66,7 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 	taskRunner := &TaskRunner{
 		cfg:          cfg,
 		queue:        queue,
-		tasks:        safemap.NewSafeMap[string, Task](),
+		tasks:        safemap.NewSafeMap[string, *Task](),
 		wg:           sync.WaitGroup{},
 		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
 		redisClient:  client,
@@ -173,6 +173,6 @@ func (t *TaskRunner) Dispatch(ctx context.Context, taskName string, payload any)
 	return nil
 }
 
-func (t *TaskRunner) RegisterTask(task Task) {
+func (t *TaskRunner) RegisterTask(task *Task) {
 	t.tasks.Set(task.Name, task)
 }

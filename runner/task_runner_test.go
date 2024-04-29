@@ -67,7 +67,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldExecuteTask() {
 	expectedPayload := "Test Payload"
 	_, taskRunner := t.setupTaskRunner(t.setupRedis())
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           10,
 		ReservationTimeout: time.Second,
@@ -103,7 +103,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskBaseOnMaxRetry() {
 	expectedError := errors.New("I'm Panic Error")
 	_, taskRunner := t.setupTaskRunner(t.setupRedis())
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           10,
 		ReservationTimeout: time.Second,
@@ -146,7 +146,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskWhenPaniced() {
 	expectedError := errors.New("I'm Panic Error")
 	_, taskRunner := t.setupTaskRunner(t.setupRedis())
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           10,
 		ReservationTimeout: time.Second,
@@ -189,7 +189,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldNotDispatchDuplicatedTasks() {
 	redisClient := t.setupRedis()
 	_, taskRunner := t.setupTaskRunner(redisClient)
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           1,
 		ReservationTimeout: time.Second,
@@ -240,7 +240,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	expectedPayload := "Test Payload"
 	redisClient := t.setupRedis()
 
-	taskOptions := Task{
+	taskOptions := &Task{
 		Name:               "task",
 		MaxRetry:           1,
 		ReservationTimeout: time.Millisecond * 10,
@@ -292,7 +292,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
 	consumeCallCounter := atomic.Int64{}
 	expectedPayload := "Test Payload"
 	redisClient := t.setupRedis()
-	taskOptions := Task{
+	taskOptions := &Task{
 		Name:               "task",
 		MaxRetry:           1,
 		ReservationTimeout: time.Millisecond * 10,
@@ -364,7 +364,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed(
 			return nil
 		},
 	}, redisClient, queue)
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
@@ -407,7 +407,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenTaskNotExist()
 			return nil
 		},
 	}, redisClient, queue)
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
@@ -451,7 +451,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenPayloadIsInval
 			return nil
 		},
 	}, redisClient, queue)
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
@@ -478,7 +478,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenPayloadIsInval
 func (t *TaskRunnerTestSuit) Test_ShouldNotDispatch_WhenTaskIsUniqueButDoesntHaveUniqueFor() {
 	_, taskRunner := t.setupTaskRunner(t.setupRedis())
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
@@ -499,7 +499,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldUseTaskNameForUnique_WhenUniqueKeyIsNil(
 	redisClient := t.setupRedis()
 	_, taskRunner := t.setupTaskRunner(redisClient)
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
@@ -532,7 +532,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldAggregateAndStoreTiming
 			return nil
 		},
 	}, redisClient, queue)
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
@@ -576,7 +576,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldCallLongQueueWhenLongQu
 		callChannel <- s
 	}
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           1,
 		ReservationTimeout: time.Second * 2,
@@ -622,7 +622,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldNotCallLongQueueWhenThe
 		callChannel <- s
 	}
 
-	taskRunner.RegisterTask(Task{
+	taskRunner.RegisterTask(&Task{
 		Name:               "task",
 		MaxRetry:           1,
 		ReservationTimeout: time.Second * 2,
