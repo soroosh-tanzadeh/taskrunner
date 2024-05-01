@@ -80,6 +80,10 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 	return taskRunner
 }
 
+func (t *TaskRunner) GetQueue() contracts.MessageQueue {
+	return t.queue
+}
+
 func (t *TaskRunner) ErrorChannel() chan error {
 	return t.errorChannel
 }
