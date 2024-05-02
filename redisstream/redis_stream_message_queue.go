@@ -3,10 +3,11 @@ package redisstream
 import (
 	"context"
 	"errors"
-	"github.com/redis/go-redis/v9"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
 	"git.arvaninternal.ir/cdn-go-kit/taskrunner/internal/ring"
@@ -222,7 +223,9 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 	wg := sync.WaitGroup{}
 
 	defer func() {
-		if err := r.client.XGroupDelConsumer(ctx, r.stream, group, consumerName).Err(); err != nil {
+		deleteConsumerCtx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		if err := r.client.XGroupDelConsumer(deleteConsumerCtx, r.stream, group, consumerName).Err(); err != nil {
 			log.WithError(err).Error("error occurred while deleting consumer")
 		}
 	}()
