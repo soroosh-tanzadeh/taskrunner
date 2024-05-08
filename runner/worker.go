@@ -118,7 +118,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 		defer func() { t.storeTiming(task.Name, time.Since(timeStart)) }()
 
 		// Release Lock and etc...
-		defer t.afterProcess(task, m.Payload)
+		defer t.afterProcess(task, taskMessage.Payload)
 
 		// Execute Task
 		resultChannel := make(chan any)
