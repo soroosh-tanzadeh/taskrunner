@@ -1,9 +1,11 @@
 package runner
 
 import (
+	"errors"
 	"time"
 
 	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
+	"github.com/go-redsync/redsync/v4"
 )
 
 const uniqueLockPrefix = "taskrunner:unique:"
@@ -26,6 +28,9 @@ func (t *TaskRunner) releaseLock(uniqueKey, value string) error {
 		Value:      value,
 	}).Unlock()
 	if err != nil {
+		if errors.Is(err, redsync.ErrLockAlreadyExpired) {
+			return nil
+		}
 		return err
 	}
 	if !result {
