@@ -175,15 +175,7 @@ func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, durati
 		}
 	}
 
-	readResult, err := r.client.XPendingExt(ctx, &redis.XPendingExtArgs{
-		Group:    group,
-		Consumer: consumerName,
-		Count:    int64(batchSize),
-		Stream:   r.stream,
-		Idle:     r.reClaimDelay,
-		Start:    "-",
-		End:      "+",
-	}).Result()
+	readResult, err := r.client.XPendingExt(ctx, commandConfig).Result()
 	if err != nil {
 		// Create Group if not exists
 		if strings.Contains(err.Error(), "NOGROUP") {
