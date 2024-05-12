@@ -11,6 +11,7 @@ import (
 
 	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
 	"git.arvaninternal.ir/cdn-go-kit/taskrunner/internal/ring"
+	semver "github.com/Masterminds/semver/v3"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -27,16 +28,28 @@ type RedisStreamMessageQueue struct {
 	messageProcessingMetrics *ring.RedisRing
 
 	deleteOnConsume bool
+
+	redisVersion *semver.Version
 }
 
 func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume bool) *RedisStreamMessageQueue {
-	return &RedisStreamMessageQueue{
+	stream := &RedisStreamMessageQueue{
 		client:                   redisClient,
 		stream:                   prefix + ":" + queue,
 		deleteOnConsume:          deleteOnConsume,
 		reClaimDelay:             reClaimDelay,
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, prefix+":metrics:"+queue),
 	}
+
+	redisInfo, _ := redisClient.InfoMap(context.Background()).Result()
+	if server, ok := redisInfo["Server"]; ok {
+		if redis_version, ok := server["redis_version"]; ok {
+			version, _ := semver.NewVersion(redis_version)
+			stream.redisVersion = version
+		}
+	}
+
+	return stream
 }
 
 func (r *RedisStreamMessageQueue) GetMetrics(ctx context.Context) (map[string]interface{}, error) {
@@ -147,6 +160,21 @@ func (r *RedisStreamMessageQueue) Receive(ctx context.Context, duration time.Dur
 }
 
 func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, duration time.Duration, batchSize int, group, consumerName string) ([]PendingMesssage, error) {
+	commandConfig := &redis.XPendingExtArgs{
+		Group:    group,
+		Consumer: consumerName,
+		Count:    int64(batchSize),
+		Stream:   r.stream,
+		Start:    "-",
+		End:      "+",
+	}
+	if r.redisVersion != nil {
+		compare := r.redisVersion.Compare(semver.MustParse("6.2"))
+		if compare == 1 || compare == 0 {
+			commandConfig.Idle = r.reClaimDelay
+		}
+	}
+
 	readResult, err := r.client.XPendingExt(ctx, &redis.XPendingExtArgs{
 		Group:    group,
 		Consumer: consumerName,
@@ -179,6 +207,10 @@ func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, durati
 
 	messages := make([]PendingMesssage, len(readResult))
 	for i, msg := range readResult {
+		if msg.Idle < r.reClaimDelay {
+			continue
+		}
+
 		messages[i] = PendingMesssage{
 			ID:         msg.ID,
 			Idle:       msg.Idle,
