@@ -197,17 +197,17 @@ func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, durati
 		return nil, contracts.ErrNoNewMessage
 	}
 
-	messages := make([]PendingMesssage, len(readResult))
-	for i, msg := range readResult {
+	messages := make([]PendingMesssage, 0)
+	for _, msg := range readResult {
 		if msg.Idle < r.reClaimDelay {
 			continue
 		}
 
-		messages[i] = PendingMesssage{
+		messages = append(messages, PendingMesssage{
 			ID:         msg.ID,
 			Idle:       msg.Idle,
 			RetryCount: msg.RetryCount,
-		}
+		})
 	}
 	return messages, nil
 }
