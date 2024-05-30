@@ -3,6 +3,7 @@ package redisstream
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -153,9 +154,12 @@ func TestRedisStreamMessageQueue_Consume_ShouldRetryFailedMessage(t *testing.T) 
 
 	callChannel := make(chan string, 3)
 	callCount := 0
+	mutex := sync.Mutex{}
 	go func() {
 		queue.Consume(ctx, 1, time.Second*4, "mygroup", "consumer1", errorChannel, func(ctx context.Context, msg contracts.Message, heartBeat contracts.HeartBeatFunc) error {
 			assert.Equal(t, "test payload", msg.GetPayload())
+			mutex.Lock()
+			defer mutex.Unlock()
 			if callCount < 3 {
 				callCount++
 				return errors.New("fake")
@@ -173,12 +177,12 @@ func TestRedisStreamMessageQueue_Consume_ShouldRetryFailedMessage(t *testing.T) 
 	assert.NoError(t, err)
 
 	// Wait for consumer to call delete
-	time.Sleep(time.Second)
+	time.Sleep(time.Second * 3)
 
 	select {
 	case err := <-errorChannel:
 		if err.Error() != "fake" {
-			t.Error(err)
+			t.FailNow()
 		}
 	case actualId := <-callChannel:
 		assert.Equal(t, msg.ID, actualId)
