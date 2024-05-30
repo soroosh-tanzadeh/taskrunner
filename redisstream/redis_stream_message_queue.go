@@ -159,14 +159,13 @@ func (r *RedisStreamMessageQueue) Receive(ctx context.Context, duration time.Dur
 	return messages, nil
 }
 
-func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, duration time.Duration, batchSize int, group, consumerName string) ([]PendingMesssage, error) {
+func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, duration time.Duration, batchSize int, group string) ([]PendingMesssage, error) {
 	commandConfig := &redis.XPendingExtArgs{
-		Group:    group,
-		Consumer: consumerName,
-		Count:    int64(batchSize),
-		Stream:   r.stream,
-		Start:    "-",
-		End:      "+",
+		Group:  group,
+		Count:  int64(batchSize),
+		Stream: r.stream,
+		Start:  "-",
+		End:    "+",
 	}
 	if r.redisVersion != nil {
 		compare := r.redisVersion.Compare(semver.MustParse("6.2"))
@@ -183,7 +182,7 @@ func (r *RedisStreamMessageQueue) getPendingMessages(ctx context.Context, durati
 				return nil, err
 			}
 			// Re-call after group creation
-			return r.getPendingMessages(ctx, duration, batchSize, group, consumerName)
+			return r.getPendingMessages(ctx, duration, batchSize, group)
 		}
 
 		if errors.Is(err, redis.Nil) {
@@ -290,7 +289,7 @@ func (r *RedisStreamMessageQueue) processPendingMessages(ctx context.Context,
 		return
 	}
 
-	pendings, err := r.getPendingMessages(ctx, blockDuration, readBatchSize, group, consumerName)
+	pendings, err := r.getPendingMessages(ctx, blockDuration, readBatchSize, group)
 	if err != nil {
 		if errors.Is(err, contracts.ErrNoNewMessage) {
 			return
@@ -300,26 +299,34 @@ func (r *RedisStreamMessageQueue) processPendingMessages(ctx context.Context,
 		return
 	}
 
-	// Consume Messages
+	pendingIds := []string{}
+	pendingsMap := make(map[string]PendingMesssage)
 	for _, pendingInfo := range pendings {
+		pendingIds = append(pendingIds, pendingInfo.ID)
+		pendingsMap[pendingInfo.ID] = pendingInfo
+	}
+
+	messages, err := r.client.XClaim(ctx, &redis.XClaimArgs{
+		Stream:   r.stream,
+		Group:    group,
+		Consumer: consumerName,
+		MinIdle:  r.reClaimDelay,
+		Messages: pendingIds,
+	}).Result()
+
+	// Consume Messages
+	for _, msg := range messages {
 		// Should not execute if context is canceled
 		if ctx.Err() != nil {
 			return
 		}
 
-		err := r.client.XClaim(ctx, &redis.XClaimArgs{
-			Stream:   r.stream,
-			Group:    group,
-			Consumer: consumerName,
-			MinIdle:  0,
-			Messages: []string{pendingInfo.ID},
-		}).Err()
 		if err != nil {
 			errorChannel <- err
 			continue
 		}
 
-		messages, err := r.client.XRange(ctx, r.stream, pendingInfo.ID, pendingInfo.ID).Result()
+		messages, err := r.client.XRange(ctx, r.stream, msg.ID, msg.ID).Result()
 		if err != nil {
 			errorChannel <- err
 			continue
@@ -329,7 +336,7 @@ func (r *RedisStreamMessageQueue) processPendingMessages(ctx context.Context,
 			continue
 		}
 
-		message := contracts.NewMessage(pendingInfo.ID, messages[0].Values[payloadKey].(string), pendingInfo.RetryCount)
+		message := contracts.NewMessage(msg.ID, messages[0].Values[payloadKey].(string), pendingsMap[msg.ID].RetryCount)
 
 		// heartbeat is required for run running tasks, to prevent the task from being acquired by another worker
 		consumeErr := consumer(ctx, message, r.getHeartBeatFunction(group, consumerName, message.GetId()))
