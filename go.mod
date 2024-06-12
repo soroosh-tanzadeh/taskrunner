@@ -1,4 +1,4 @@
-module git.arvaninternal.ir/cdn-go-kit/taskrunner
+module github.com/soroosh-tanzadeh/taskrunner
 
 go 1.21
 

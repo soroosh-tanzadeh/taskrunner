@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 )
 
 func (t *TaskRunner) addWorker(ctx context.Context, workerID int) {

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
 	"github.com/go-redsync/redsync/v4"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 )
 
 const uniqueLockPrefix = "taskrunner:unique:"

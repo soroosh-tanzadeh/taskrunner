@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/redis/go-redis/v9"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/internal/ring"
-	semver "github.com/Masterminds/semver/v3"
 	log "github.com/sirupsen/logrus"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
+	"github.com/soroosh-tanzadeh/taskrunner/internal/ring"
 )
 
 const payloadKey = "payload"

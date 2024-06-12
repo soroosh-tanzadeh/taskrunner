@@ -3,11 +3,11 @@ package locker
 import (
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
 	"github.com/go-redsync/redsync/v4"
 	redsyncredis "github.com/go-redsync/redsync/v4/redis"
 	"github.com/go-redsync/redsync/v4/redis/goredis/v9"
 	"github.com/redis/go-redis/v9"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 )
 
 const DefaultRetryDuration = time.Duration(100) * time.Millisecond

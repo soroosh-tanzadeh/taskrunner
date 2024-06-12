@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/redisstream"
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/runner"
+	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
+	"github.com/soroosh-tanzadeh/taskrunner/runner"
 	"github.com/redis/go-redis/v9"
 )
 

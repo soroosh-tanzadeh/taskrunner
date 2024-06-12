@@ -5,7 +5,7 @@ package runner
 import (
 	context "context"
 
-	contracts "git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
+	contracts "github.com/soroosh-tanzadeh/taskrunner/contracts"
 	mock "github.com/stretchr/testify/mock"
 
 	time "time"

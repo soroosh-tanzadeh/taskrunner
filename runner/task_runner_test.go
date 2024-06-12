@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/redisstream"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
+	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 )

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -8,10 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/contracts"
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/internal/locker"
-	"git.arvaninternal.ir/cdn-go-kit/taskrunner/internal/safemap"
 	"github.com/redis/go-redis/v9"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
+	"github.com/soroosh-tanzadeh/taskrunner/internal/locker"
+	"github.com/soroosh-tanzadeh/taskrunner/internal/safemap"
 )
 
 const (
