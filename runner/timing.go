@@ -45,7 +45,7 @@ func (t *TaskRunner) timingAggregator() {
 				continue
 			}
 
-			t.errorChannel <- err
+			t.captureError(err)
 			continue
 		}
 
@@ -59,7 +59,7 @@ func (t *TaskRunner) timingAggregator() {
 	avgTiming := totalExecutionAverage
 	queueLen, err := t.queue.Len()
 	if err != nil {
-		t.errorChannel <- err
+		t.captureError(err)
 		return
 	}
 	// TODO I don't know if this way of predicting is true or not

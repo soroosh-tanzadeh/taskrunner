@@ -88,6 +88,10 @@ func (t *TaskRunner) ErrorChannel() chan error {
 	return t.errorChannel
 }
 
+func (t *TaskRunner) captureError(err error) {
+	t.errorChannel <- err
+}
+
 func (t *TaskRunner) Start(ctx context.Context) error {
 	if t.status.Load() != stateInit {
 		return ErrTaskRunnerAlreadyStarted

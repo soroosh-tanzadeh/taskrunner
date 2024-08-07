@@ -101,6 +101,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskBaseOnMaxRetry() {
 	counter := atomic.Int64{}
 	expectedPayload := "Test Payload"
 	expectedError := errors.New("I'm Panic Error")
+	expectedErrorWrap := NewTaskExecutionError("task", expectedError)
 	_, taskRunner := t.setupTaskRunner(t.setupRedis())
 
 	taskRunner.RegisterTask(&Task{
@@ -131,7 +132,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskBaseOnMaxRetry() {
 		t.Assert().Equal(10, counter.Load())
 		break
 	case err := <-taskRunner.ErrorChannel():
-		if err != expectedError {
+		if err.(TaskExecutionError).GetError().Error() != expectedErrorWrap.GetError().Error() {
 			t.FailNow(err.Error())
 		}
 	case <-time.After(time.Second):
@@ -144,6 +145,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskWhenPaniced() {
 	counter := atomic.Int64{}
 	expectedPayload := "Test Payload"
 	expectedError := errors.New("I'm Panic Error")
+	expectedErrorWrap := NewTaskExecutionError("task", expectedError)
 	_, taskRunner := t.setupTaskRunner(t.setupRedis())
 
 	taskRunner.RegisterTask(&Task{
@@ -174,7 +176,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskWhenPaniced() {
 		t.Assert().Equal(10, counter.Load())
 		break
 	case err := <-taskRunner.ErrorChannel():
-		if err != expectedError {
+		if err.(TaskExecutionError).GetError().Error() != expectedErrorWrap.GetError().Error() {
 			t.FailNow(err.Error())
 		}
 	case <-time.After(time.Second):
