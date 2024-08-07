@@ -49,18 +49,17 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 				logEntry := log.WithField("worker_id", workerID).WithField("cause", r)
 				if ok {
 					logEntry = logEntry.WithError(err)
-					resultChannel <- err
+					resultChannel <- NewTaskExecutionError(task.Name, err)
 				} else {
-					resultChannel <- TaskRunnerError(fmt.Sprintf("Task %s execution failed", task.Name))
+					resultChannel <- NewTaskExecutionError(task.Name, TaskRunnerError(fmt.Sprintf("Task %s Panic: %v", task.Name, err)))
 				}
 
-				logEntry.Error("Task Panic")
-
+				logEntry.Errorf("Task %s Panic", task.Name)
 			}
 		}()
 		// Note: Deferred function calls are pushed onto a stack.
 		if err := task.Action(ctx, payload); err != nil {
-			resultChannel <- err
+			resultChannel <- NewTaskExecutionError(task.Name, err)
 		}
 		resultChannel <- true
 	}
@@ -132,7 +131,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 			case result := <-resultChannel:
 				if _, ok := result.(bool); !ok {
 					failed()
-					return result.(error)
+					return result.(TaskExecutionError)
 				}
 				t.processed.Add(1)
 				return nil
@@ -140,7 +139,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 			// Task execution is taking time, send heartbeat to prevent reClaim
 			case <-time.After(task.ReservationTimeout):
 				if err := hbf(ctx); err != nil {
-					t.errorChannel <- err
+					t.captureError(err)
 				}
 			}
 		}
@@ -151,7 +150,7 @@ func (t *TaskRunner) afterProcess(task *Task, payload any) {
 	if task.Unique {
 		err := t.releaseLock(task.lockKey(payload), task.lockValue)
 		if err != nil {
-			t.errorChannel <- err
+			t.captureError(err)
 		}
 	}
 }
