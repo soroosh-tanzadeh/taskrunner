@@ -95,11 +95,6 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 			return t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskNotFound)
 		}
 
-		// Set lock value to unlock
-		if taskMessage.Unique {
-			task.lockValue = taskMessage.UniqueLockValue
-		}
-
 		// Handle Max retry
 		if task.MaxRetry == 0 {
 			task.MaxRetry = 1
@@ -117,7 +112,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 		defer func() { t.storeTiming(task.Name, time.Since(timeStart)) }()
 
 		// Release Lock and etc...
-		defer t.afterProcess(task, taskMessage.Payload)
+		defer t.afterProcess(taskMessage)
 
 		// Execute Task
 		resultChannel := make(chan any)
@@ -146,9 +141,9 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 	})
 }
 
-func (t *TaskRunner) afterProcess(task *Task, payload any) {
-	if task.Unique {
-		err := t.releaseLock(task.lockKey(payload), task.lockValue)
+func (t *TaskRunner) afterProcess(message TaskMessage) {
+	if message.Unique {
+		err := t.releaseLock(message.UniqueKey, message.UniqueLockValue)
 		if err != nil {
 			t.captureError(err)
 		}
