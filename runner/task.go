@@ -28,8 +28,6 @@ type Task struct {
 	// If `UniqueFor` seconds have passed since a task with the same name and UniqueKey was enqueued and it has not finished processing yet, the new task with the same name and UniqueKey can now be dispatched.
 	// this option is required when Unique is true
 	UniqueFor int64
-
-	lockValue string
 }
 
 func (t *Task) CreateMessage(paylaod any) TaskMessage {
