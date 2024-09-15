@@ -62,7 +62,7 @@ return average
 `)
 
 func (t *TaskRunner) avgOfStream(destination, destinationField, stream, start, end string, count int, field string) (int64, error) {
-	result, err := aggregateScript.Eval(context.Background(), t.redisClient, []string{stream, destination, destinationField}, start, end, count, field).Result()
+	result, err := aggregateScript.Run(context.Background(), t.redisClient, []string{stream, destination, destinationField}, start, end, count, field).Result()
 	if err != nil {
 		return 0, err
 	}
