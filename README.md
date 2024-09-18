@@ -1,15 +1,17 @@
 # TaskRunner 
 TaskRunner is a robust and efficient Go library designed to leverage the power of **Redis Streams** for distributed task execution.
 
+
+
 ## Key Features
 - **Asynchronous task Processing:** TaskRunner enables the scheduling and execution of tasks asynchronously, allowing your application to remain responsive and performant under heavy load.
 - **Scalable and Distributed:** Designed to scale horizontally, this library can expand its capacity by adding more workers without impacting the existing infrastructure. It supports seamless distribution of tasks across a cluster of servers, optimizing resource usage and balancing the load.
 - **Fault Tolerance:** Includes features for automatic task retries and error handling, ensuring that system failures do not lead to task loss or inconsistencies.
 - **Simple API:** Offers a straightforward and intuitive API that makes it easy to integrate and use within your existing Go applications.
 - **Real-time Monitoring and Logging:** Integrates monitoring capabilities to track task status and performance metrics in real-time, alongside comprehensive logging for debugging and audit trails.
+- **Task Scheduler:** The Task Scheduler allows the scheduling and execution of both one-time and periodic tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. Tasks are scheduled, enqueued, and executed by workers in a distributed manner, ensuring scalability and reliability.
 
-## How to use
-
+## Task Queue
 ### Simple Example
 ```go
 package main
@@ -105,3 +107,54 @@ Below is a table detailing the fields of the `Task` struct:
 | `Unique`            | `bool`          | If set to `true`, the task will not be dispatched if an identical task (by name and UniqueKey) is already in the queue and has not been completed.                             |
 | `UniqueKey`         | `UniqueKeyFunc` | Specifies a function to generate a unique key for the task. If `Unique` is `true`, tasks with the same unique key must not be in the queue simultaneously.       |
 | `UniqueFor`         | `int64`         | The time in seconds that must elapse since a similarly unique task was last enqueued before a new task with the same name and unique key can be dispatched.      |
+
+
+
+## Task Scheduler
+
+The Task Scheduler allows the scheduling and execution of both one-time and periodic tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. 
+
+
+### How it works?
+
+#### 1. Task Submission
+
+Users interact with the **TaskRunner** to schedule tasks.
+
+- **TaskScheduler** calculates the next execution time based on the time duration provided.
+- The task is then added to a Redis Sorted Set (`ZSET`), with the execution time serving as the score. This allows Redis to efficiently track when the task should be processed.
+
+#### 2. Task Enqueuing
+
+A go-routine, the **TaskEnqueuer**, checks the Redis Sorted Set at regular intervals to find tasks that are due for execution. (the process is atomic, and can be executed on multiple nodes without overlapping)
+
+- The **TaskEnqueuer** fetches tasks whose execution times are less than or equal to the current time.
+- These tasks are then moved from the **ZSET** to a Redis Stream, where they are ready for processing by workers.
+- After enqueuing, the task is removed from the **ZSET**.
+- The tasks are then rescheduled after calculating the next run time (if the task is unique, `UniqueFor` will be added into the next execution time).
+
+#### 3. Task Execution
+
+**Workers** consume tasks from the Redis Stream and execute them based on the task's payload and metadata.
+
+
+```mermaid
+flowchart LR
+    H[Workers Consume Task from Redis Stream] --> I[Execute Task]
+	I --> J{Is Task Periodic?}
+    J --> |No| M[Task Completed]
+	J --> |Yes| B[TaskScheduler Schedules Task]
+
+    A[User Schedules Task] --> B[TaskSchedule]
+    subgraph Task Schedule
+    	B --> C[TaskScheduler Calculates Next Run Time]
+   	 	C --> D[TaskScheduler Adds Task to Redis ZSET]
+		D --> E[TaskEnqueuer Periodically Checks ZSET]
+        E --> F{Is Task Due?}
+		F --> G{Is current node/process leader?}
+		G --> |Yes| Q[Enqueue Task]
+        G --> |No| E
+        F --> |No| E
+    end
+	Q --> H
+```
