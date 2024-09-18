@@ -21,6 +21,8 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+        ports:
+            - 6379:6379
     steps:
     - uses: actions/checkout@v4
 
@@ -35,4 +37,4 @@ jobs:
     - name: Test
       run: go test -v ./...
       env:
-        REDIS_SERVER: "redis:6379"
+        REDIS_SERVER: "localhost:6379"
