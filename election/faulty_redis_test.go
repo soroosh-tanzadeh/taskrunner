@@ -1,4 +1,4 @@
-package leadership
+package election
 
 import (
 	"context"

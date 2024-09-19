@@ -35,34 +35,34 @@ func (t *TaskRunner) addWorker(ctx context.Context, workerID int) {
 	t.process(ctx, workerID)
 }
 
+func executeTask(ctx context.Context, workerID int, task *Task, payload any, resultChannel chan any) {
+	// Close channel to prevent infinit for-loop
+	defer close(resultChannel)
+	// Handle Panic
+	defer func() {
+		if r := recover(); r != nil {
+			err, ok := r.(error)
+			logEntry := log.WithField("worker_id", workerID).WithField("cause", r)
+			if ok {
+				logEntry = logEntry.WithError(err)
+				resultChannel <- NewTaskExecutionError(task.Name, err)
+			} else {
+				resultChannel <- NewTaskExecutionError(task.Name, TaskRunnerError(fmt.Sprintf("Task %s Panic: %v", task.Name, err)))
+			}
+
+			logEntry.Errorf("Task %s Panic", task.Name)
+		}
+	}()
+	// Note: Deferred function calls are pushed onto a stack.
+	if err := task.Action(ctx, payload); err != nil {
+		resultChannel <- NewTaskExecutionError(task.Name, err)
+	}
+	resultChannel <- true
+}
+
 func (t *TaskRunner) process(ctx context.Context, workerID int) {
 	batchSize := t.cfg.BatchSize
 	consumerName := t.consumerName() + "_" + strconv.Itoa(workerID)
-
-	executeTask := func(ctx context.Context, task *Task, payload any, resultChannel chan any) {
-		// Close channel to prevent infinit for-loop
-		defer close(resultChannel)
-		// Handle Panic
-		defer func() {
-			if r := recover(); r != nil {
-				err, ok := r.(error)
-				logEntry := log.WithField("worker_id", workerID).WithField("cause", r)
-				if ok {
-					logEntry = logEntry.WithError(err)
-					resultChannel <- NewTaskExecutionError(task.Name, err)
-				} else {
-					resultChannel <- NewTaskExecutionError(task.Name, TaskRunnerError(fmt.Sprintf("Task %s Panic: %v", task.Name, err)))
-				}
-
-				logEntry.Errorf("Task %s Panic", task.Name)
-			}
-		}()
-		// Note: Deferred function calls are pushed onto a stack.
-		if err := task.Action(ctx, payload); err != nil {
-			resultChannel <- NewTaskExecutionError(task.Name, err)
-		}
-		resultChannel <- true
-	}
 
 	t.queue.Consume(ctx, batchSize, time.Second*5, t.cfg.ConsumerGroup, consumerName, t.errorChannel, func(ctx context.Context, m contracts.Message, hbf contracts.HeartBeatFunc) error {
 		t.inFlight.Add(1)
@@ -117,7 +117,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 		// Execute Task
 		resultChannel := make(chan any)
 
-		go executeTask(ctx, task, taskMessage.Payload, resultChannel)
+		go executeTask(ctx, workerID, task, taskMessage.Payload, resultChannel)
 
 		// Wait for execution result
 		for {
@@ -142,6 +142,7 @@ func (t *TaskRunner) process(ctx context.Context, workerID int) {
 }
 
 func (t *TaskRunner) afterProcess(message TaskMessage) {
+	// Release Unique lock
 	if message.Unique {
 		err := t.releaseLock(message.UniqueKey, message.UniqueLockValue)
 		if err != nil {

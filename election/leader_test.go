@@ -1,4 +1,4 @@
-package leadership
+package election
 
 import (
 	"context"
@@ -37,8 +37,8 @@ func makeRedis(t *testing.T) *redis.Client {
 	return cli
 }
 
-func makeWatcher(host string, opts Opts) (*Leader, *leaderWatcher) {
-	lead, promote, demote, err := NewLeader(host, opts)
+func makeWatcher(host string, opts Opts) (*Elector, *leaderWatcher) {
+	lead, promote, demote, err := NewElector(host, opts)
 	watcher := &leaderWatcher{}
 	go func() {
 		for {

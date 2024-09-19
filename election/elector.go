@@ -1,8 +1,10 @@
-package leadership
+package election
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -11,7 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type Leader struct {
+type Elector struct {
 	host      string
 	redis     redis.Scripter
 	key       string
@@ -53,7 +55,7 @@ func clientID() string {
 	return base32.StdEncoding.EncodeToString(id)
 }
 
-func NewLeader(host string, opts Opts) (leader *Leader, onPromote <-chan time.Time, onDemote <-chan time.Time, onError <-chan error) {
+func NewElector(host string, opts Opts) (leader *Elector, onPromote <-chan time.Time, onDemote <-chan time.Time, onError <-chan error) {
 	if opts.TTL == 0 {
 		panic("NewLeader received a zero TTL")
 	}
@@ -66,7 +68,7 @@ func NewLeader(host string, opts Opts) (leader *Leader, onPromote <-chan time.Ti
 	demo := make(chan time.Time, 10)
 	err := make(chan error, 10)
 
-	return &Leader{
+	return &Elector{
 		host:    host,
 		redis:   opts.Redis,
 		leading: false,
@@ -92,7 +94,7 @@ func randomJitter(val time.Duration) time.Duration {
 	return time.Duration(rand.Intn(int(val.Milliseconds()))) * time.Millisecond
 }
 
-func (i *Leader) renew() {
+func (i *Elector) renew() {
 	i.electionLock.Lock()
 	defer i.electionLock.Unlock()
 
@@ -129,7 +131,7 @@ func (i *Leader) renew() {
 	i.cancelElectionRun = runAfter(i.wait, i.runElection)
 }
 
-func (i *Leader) runElection() {
+func (i *Elector) runElection() {
 	i.electionLock.Lock()
 	defer i.electionLock.Unlock()
 	i.cancelElectionRun = nil
@@ -163,7 +165,7 @@ func (i *Leader) runElection() {
 
 }
 
-func (i *Leader) voidTimers() {
+func (i *Elector) voidTimers() {
 	if i.cancelElectionRun != nil {
 		i.cancelElectionRun()
 		i.cancelRenewRun = nil
@@ -174,7 +176,7 @@ func (i *Leader) voidTimers() {
 	}
 }
 
-func (i *Leader) resign() error {
+func (i *Elector) resign() error {
 	i.electionLock.Lock()
 	defer i.electionLock.Unlock()
 	i.voidTimers()
@@ -194,7 +196,7 @@ func (i *Leader) resign() error {
 	return nil
 }
 
-func (i *Leader) Start() {
+func (i *Elector) Start() {
 	i.startStopLock.Lock()
 	defer i.startStopLock.Unlock()
 	if i.running {
@@ -205,7 +207,7 @@ func (i *Leader) Start() {
 	go i.runElection()
 }
 
-func (i *Leader) Stop() error {
+func (i *Elector) Stop() error {
 	i.startStopLock.Lock()
 	defer i.startStopLock.Unlock()
 	if !i.running {
@@ -214,6 +216,10 @@ func (i *Leader) Stop() error {
 	return i.resign()
 }
 
-func (i *Leader) IsLeading() bool {
-	return i.leading
+func (i *Elector) IsLeader(context.Context) error {
+	if i.leading {
+		return nil
+	}
+
+	return errors.New("it's not leader")
 }

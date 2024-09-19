@@ -28,10 +28,6 @@ type Task struct {
 	// If `UniqueFor` seconds have passed since a task with the same name and UniqueKey was enqueued and it has not finished processing yet, the new task with the same name and UniqueKey can now be dispatched.
 	// this option is required when Unique is true
 	UniqueFor int64
-
-	// If the duration exceeds 5 seconds (the minimum schedule cycle), the task will be re-enqueued after successful execution.
-	// The duration should be a multiple of 5 seconds; otherwise, it will be rounded up to the next multiple of 5 seconds, causing a delay.
-	Every time.Duration
 }
 
 func (t *Task) CreateMessage(paylaod any) TaskMessage {

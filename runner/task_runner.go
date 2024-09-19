@@ -20,11 +20,14 @@ const (
 	ErrTaskNotFound             = TaskRunnerError("TaskNotFound")
 	ErrInvalidTaskPayload       = TaskRunnerError("ErrInvalidTaskPayload")
 
-	ErrTaskMaxRetryExceed  = TaskRunnerError("ErrTaskMaxRetryExceed")
-	ErrUniqueForIsRequired = TaskRunnerError("ErrUniqueForIsRequired")
+	ErrTaskMaxRetryExceed      = TaskRunnerError("ErrTaskMaxRetryExceed")
+	ErrFailedToScheduleNextRun = TaskRunnerError("ErrFailedToScheduleNextRun")
+	ErrUniqueForIsRequired     = TaskRunnerError("ErrUniqueForIsRequired")
 
 	// It will happen when task is setted to be Unique and another task with same name and unique key dispached
 	ErrTaskAlreadyDispatched = TaskRunnerError("ErrTaskAlreadyDispatched")
+
+	ErrDelayedTaskCanNotBeUnique = TaskRunnerError("ErrDelayedTaskCanNotBeUnique")
 )
 
 const (
@@ -35,6 +38,8 @@ const (
 const metricsKeyPrefix = "taskrunner:"
 
 type TaskRunner struct {
+	// schedule gocron.Scheduler
+
 	status atomic.Uint64
 
 	tasks *safemap.SafeMap[string, *Task]
@@ -108,8 +113,15 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 
 	t.wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(t.cfg.LongQueueThreshold / 2)
 		defer t.wg.Done()
+
+		var ticker *time.Ticker
+		if t.cfg.LongQueueThreshold > 0 {
+			ticker = time.NewTicker(t.cfg.LongQueueThreshold / 2)
+		} else {
+			ticker = time.NewTicker(time.Minute)
+		}
+
 		for {
 			select {
 			case <-ticker.C:
