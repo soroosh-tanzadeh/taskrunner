@@ -37,7 +37,7 @@ func makeRedis(t *testing.T) *redis.Client {
 	return cli
 }
 
-func makeWatcher(host string, opts Opts) (*Elector, *leaderWatcher) {
+func makeWatcher(opts Opts) (*Elector, *leaderWatcher) {
 	lead, promote, demote, err := NewElector(opts)
 	watcher := &leaderWatcher{}
 	go func() {
@@ -60,7 +60,7 @@ func TestLeader(t *testing.T) {
 	cli := makeRedis(t)
 
 	cli1 := &faultyScripter{client: cli, breakFlag: false}
-	leader1, watch1 := makeWatcher("leader1", Opts{
+	leader1, watch1 := makeWatcher(Opts{
 		Redis:    cli1,
 		TTL:      1 * time.Second,
 		Wait:     2 * time.Second,
@@ -73,7 +73,7 @@ func TestLeader(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	cli2 := &faultyScripter{client: cli, breakFlag: false}
-	leader2, watch2 := makeWatcher("leader2", Opts{
+	leader2, watch2 := makeWatcher(Opts{
 		Redis:    cli2,
 		TTL:      1 * time.Second,
 		Wait:     2 * time.Second,
