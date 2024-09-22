@@ -27,10 +27,26 @@ func (t *TaskRunner) storeTiming(taskName string, x time.Duration) {
 // The total execution time for the queue is estimated as (T_avg * Q_len) / (W_num * R_factor).
 // If the estimated time exceeds the LongQueueThreshold, a Hook is triggered to notify the User.
 func (t *TaskRunner) timingAggregator() {
+	stats, err := t.GetTimingStatistics()
+	if err != nil {
+		t.captureError(err)
+		return
+	}
+
+	if time.Duration(stats.PredictedWaitTime*float64(time.Millisecond)) > t.cfg.LongQueueThreshold {
+		// LongQueueThreshold exceed, notify the developer
+		if t.cfg.LongQueueHook != nil {
+			t.cfg.LongQueueHook(stats)
+		}
+	}
+}
+
+// GetTimingStatistics return PerTaskTiming and other estimated statistics of the queue
+func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	// captures a snapshot of the currently registered tasks
 	tasks := t.tasks.Snapshot()
 	if len(tasks) == 0 {
-		return
+		return Stats{}, nil
 	}
 
 	var totalExecutionAverage int64 = 0
@@ -60,22 +76,15 @@ func (t *TaskRunner) timingAggregator() {
 	queueLen, err := t.queue.Len()
 	if err != nil {
 		t.captureError(err)
-		return
+		return Stats{}, nil
 	}
-	// TODO I don't know if this way of predicting is true or not
-	// Estimate wait time for queue
-	// (T_avg * Q_len) / (W_num * R_factor)
-	predictedWaitTime := (float64(avgTiming) * float64(queueLen)) / (float64(t.cfg.NumWorkers) * float64(t.cfg.ReplicationFactor))
-	if time.Duration(predictedWaitTime*float64(time.Millisecond)) > t.cfg.LongQueueThreshold {
-		// LongQueueThreshold exceed, notify the developer
-		if t.cfg.LongQueueHook != nil {
-			t.cfg.LongQueueHook(Stats{
-				PerTaskTiming:     perTaskTiming,
-				PredictedWaitTime: float64(predictedWaitTime),
-				AvgTiming:         time.Duration(avgTiming * int64(time.Millisecond)),
-			})
-		}
-	}
+	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(t.cfg.NumWorkers)) * float64(t.cfg.ReplicationFactor))
+	return Stats{
+		PerTaskTiming:     perTaskTiming,
+		PredictedWaitTime: float64(predictedWaitTime),
+		AvgTiming:         time.Duration(avgTiming * int64(time.Millisecond)),
+		TPS:               float64(1000.0) / float64(avgTiming),
+	}, nil
 }
 
 func (t *TaskRunner) timingFlush(buf []timingDto) error {

@@ -650,6 +650,59 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldNotCallLongQueueWhenThe
 	}
 }
 
+func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpected() {
+	callChannel := make(chan Stats)
+	redisClient := t.setupRedis()
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	taskRunner := NewTaskRunner(TaskRunnerConfig{
+		BatchSize:          1,
+		ConsumerGroup:      "test_group",
+		ConsumersPrefix:    "taskrunner",
+		NumWorkers:         1,
+		LongQueueThreshold: time.Millisecond * 100,
+		ReplicationFactor:  1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			return nil
+		},
+	}, redisClient, queue)
+	taskRunner.cfg.LongQueueHook = func(s Stats) {
+		callChannel <- s
+	}
+
+	taskRunner.RegisterTask(&Task{
+		Name:               "task",
+		MaxRetry:           1,
+		ReservationTimeout: time.Second * 2,
+		Action: func(ctx context.Context, payload any) error {
+			<-time.After(time.Millisecond * 500)
+			return nil
+		},
+	})
+	for i := 0; i < 16; i++ {
+		err := taskRunner.Dispatch(context.Background(), "task", "test-task")
+		t.Assert().NoError(err)
+	}
+
+	go func() {
+		taskRunner.Start(context.Background())
+	}()
+
+	select {
+	case s := <-callChannel:
+		timing, err := taskRunner.GetTimingStatistics()
+		t.Assert().Nil(err)
+		t.Assert().GreaterOrEqual(math.Floor(s.PredictedWaitTime), 100.0)
+		t.Assert().Equal(float64(2), timing.TPS)
+		t.Assert().Equal(time.Millisecond*500, timing.AvgTiming)
+		t.Assert().Equal(map[string]int64{
+			"task": 500,
+		}, timing.PerTaskTiming)
+
+	case <-time.After(time.Second * 5):
+		t.FailNow("LongQueueHook not called")
+	}
+}
+
 func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() {
 	redisClient := t.setupRedis()
 	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
@@ -657,7 +710,7 @@ func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() 
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
-		NumWorkers:         4,
+		NumWorkers:         1,
 		LongQueueThreshold: time.Millisecond * 100,
 		ReplicationFactor:  1,
 		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
