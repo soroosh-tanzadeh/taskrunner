@@ -14,7 +14,6 @@ import (
 )
 
 type Elector struct {
-	host      string
 	redis     redis.Scripter
 	key       string
 	id        string
@@ -55,7 +54,7 @@ func clientID() string {
 	return base32.StdEncoding.EncodeToString(id)
 }
 
-func NewElector(host string, opts Opts) (leader *Elector, onPromote <-chan time.Time, onDemote <-chan time.Time, onError <-chan error) {
+func NewElector(opts Opts) (leader *Elector, onPromote <-chan time.Time, onDemote <-chan time.Time, onError <-chan error) {
 	if opts.TTL == 0 {
 		panic("NewLeader received a zero TTL")
 	}
@@ -69,7 +68,6 @@ func NewElector(host string, opts Opts) (leader *Elector, onPromote <-chan time.
 	err := make(chan error, 10)
 
 	return &Elector{
-		host:    host,
 		redis:   opts.Redis,
 		leading: false,
 		key:     makeKey(opts.Key),
@@ -138,7 +136,6 @@ func (i *Elector) runElection() {
 
 	set, err := doAtomicSet(i.redis, i.key, i.id, i.ttl)
 	if err != nil {
-		fmt.Println(i.host, " I'm broken")
 		i.errorCh <- fmt.Errorf("trying to run election: %w", err)
 		i.cancelElectionRun = runAfter(i.wait, i.runElection)
 		return
@@ -146,13 +143,11 @@ func (i *Elector) runElection() {
 
 	if set {
 		i.leading = true
-		fmt.Println(i.host, " I'm the leader now")
 		i.promoteCh <- time.Now()
 
 		i.cancelRenewRun = runAfter((i.ttl/2)+randomJitter(i.jitter), i.renew)
 	} else {
 		if i.leading {
-			fmt.Println(i.host, " I'm not leader anymore")
 			i.demoteCh <- time.Now()
 		}
 		i.leading = false

@@ -38,7 +38,7 @@ func makeRedis(t *testing.T) *redis.Client {
 }
 
 func makeWatcher(host string, opts Opts) (*Elector, *leaderWatcher) {
-	lead, promote, demote, err := NewElector(host, opts)
+	lead, promote, demote, err := NewElector(opts)
 	watcher := &leaderWatcher{}
 	go func() {
 		for {

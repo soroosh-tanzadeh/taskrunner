@@ -10,6 +10,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
+	"github.com/soroosh-tanzadeh/taskrunner/election"
 	"github.com/soroosh-tanzadeh/taskrunner/internal/locker"
 	"github.com/soroosh-tanzadeh/taskrunner/internal/safemap"
 )
@@ -26,8 +27,6 @@ const (
 
 	// It will happen when task is setted to be Unique and another task with same name and unique key dispached
 	ErrTaskAlreadyDispatched = TaskRunnerError("ErrTaskAlreadyDispatched")
-
-	ErrDelayedTaskCanNotBeUnique = TaskRunnerError("ErrDelayedTaskCanNotBeUnique")
 )
 
 const (
@@ -38,7 +37,9 @@ const (
 const metricsKeyPrefix = "taskrunner:"
 
 type TaskRunner struct {
-	// schedule gocron.Scheduler
+	elector *election.Elector
+
+	isLeader *atomic.Bool
 
 	status atomic.Uint64
 
@@ -75,6 +76,7 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 		wg:           sync.WaitGroup{},
 		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
 		redisClient:  client,
+		isLeader:     &atomic.Bool{},
 		errorChannel: make(chan error),
 	}
 	if taskRunner.cfg.ReplicationFactor == 0 {
@@ -135,6 +137,9 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 	if !t.status.CompareAndSwap(stateStarting, stateStarted) {
 		panic(ErrRaceOccuredOnStart)
 	}
+
+	t.wg.Add(1)
+	t.StartElection(ctx)
 
 	t.wg.Wait()
 

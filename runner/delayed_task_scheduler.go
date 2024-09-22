@@ -3,26 +3,25 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	election "github.com/soroosh-tanzadeh/taskrunner/election"
 )
 
 const delayedTasksKey = "taskrunner:delayed_tasks"
 
-func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int, elector *election.Elector) error {
-	ticker := time.NewTicker(time.Second * 5)
+func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) error {
+	ticker := time.NewTicker(time.Second * 1)
 	for {
 		select {
 		case nowTime := <-ticker.C:
-			now := strconv.Itoa(int(nowTime.UnixMilli()))
+			now := strconv.Itoa(int(nowTime.Unix()))
 
-			isLeader := elector.IsLeader(context.Background())
-			if isLeader != nil {
+			if !t.IsLeader() {
 				continue
 			}
 
@@ -41,6 +40,7 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int, el
 					Count:  int64(batchSize),
 					Offset: int64((page) * batchSize),
 				}).Result()
+
 				if err != nil {
 					t.captureError(err)
 					continue
@@ -52,13 +52,20 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int, el
 
 					if err := json.Unmarshal([]byte(payload), &task); err != nil {
 						t.captureError(err)
+						continue
 					}
 
 					if err := t.Dispatch(context.Background(), task.Task, task.Payload); err != nil {
+						if !errors.Is(err, ErrTaskAlreadyDispatched) {
+							t.captureError(err)
+							continue
+						}
+					}
+					if err := t.redisClient.ZRem(context.Background(), delayedTasksKey, payload).Err(); err != nil {
 						t.captureError(err)
 					}
-					t.redisClient.ZRem(context.Background(), delayedTasksKey, payload)
 				}
+
 			}
 
 		case <-ctx.Done():
@@ -75,7 +82,7 @@ func (t *TaskRunner) DispatchDelayed(ctx context.Context, taskName string, paylo
 
 	delayedTask := DelayedTask{
 		Id:      uuid.NewString(),
-		Time:    time.Now().Add(d).UnixMilli(),
+		Time:    time.Now().Add(d).Unix(),
 		Payload: payload,
 		Task:    taskName,
 	}
@@ -95,7 +102,7 @@ func (t *TaskRunner) ScheduleFor(ctx context.Context, taskName string, payload a
 
 	delayedTask := DelayedTask{
 		Id:      uuid.NewString(),
-		Time:    executionTime.UnixMilli(),
+		Time:    executionTime.Unix(),
 		Payload: payload,
 		Task:    taskName,
 	}
