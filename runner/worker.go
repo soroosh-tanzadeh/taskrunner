@@ -15,6 +15,9 @@ import (
 
 func (t *TaskRunner) addWorker(ctx context.Context, workerID int) {
 	t.activeWorkers.Add(1)
+
+	defer t.wg.Done()
+	defer t.activeWorkers.Add(-1)
 	defer func() {
 		r := recover()
 		if r != nil {
@@ -25,13 +28,19 @@ func (t *TaskRunner) addWorker(ctx context.Context, workerID int) {
 			}
 			logEntry.Error("Woker Panic")
 
+			if ctx.Err() != nil {
+				return
+			}
+
 			// Add new process to keep number of workers constant
 			t.wg.Add(1)
-			go t.addWorker(ctx, int(t.activeWorkers.Add(1)))
+			go func() {
+				defer t.wg.Done()
+				t.addWorker(ctx, int(t.activeWorkers.Add(1)))
+			}()
 		}
 	}()
-	defer t.wg.Done()
-	defer t.activeWorkers.Add(-1)
+
 	t.process(ctx, workerID)
 }
 

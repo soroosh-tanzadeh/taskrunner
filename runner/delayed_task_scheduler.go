@@ -9,13 +9,39 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	ants "github.com/panjf2000/ants/v2"
 	"github.com/redis/go-redis/v9"
 )
 
 const delayedTasksKey = "taskrunner:delayed_tasks"
 
 func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) error {
-	ticker := time.NewTicker(time.Second * 1)
+	workerPool, err := ants.NewPoolWithFunc(batchSize, func(arg interface{}) {
+		args := arg.(map[string]interface{})
+		task := args["task"].(DelayedTask)
+		payload := args["payload"].(string)
+
+		if t.status.Load() == stateStopped {
+			return
+		}
+
+		if err := t.Dispatch(context.Background(), task.Task, task.Payload); err != nil {
+			if !errors.Is(err, ErrTaskAlreadyDispatched) {
+				t.captureError(err)
+			}
+			return
+		}
+
+		if _, err := t.redisClient.ZRem(context.Background(), delayedTasksKey, payload).Result(); err != nil {
+			t.captureError(err)
+		}
+
+	}, ants.WithNonblocking(false), ants.WithExpiryDuration(time.Second*2))
+
+	if err != nil {
+		return err
+	}
+	ticker := time.NewTicker(time.Second * 5)
 	for {
 		select {
 		case nowTime := <-ticker.C:
@@ -33,6 +59,8 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 
 			pages := math.Ceil(float64(count) / float64(batchSize))
 
+			// startDispatcing :=
+			counter := 0
 			for page := 0; page < int(pages); page++ {
 				tasks, err := t.redisClient.ZRangeByScoreWithScores(context.Background(), delayedTasksKey, &redis.ZRangeBy{
 					Min:    "-inf",
@@ -55,29 +83,32 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 						continue
 					}
 
-					if err := t.Dispatch(context.Background(), task.Task, task.Payload); err != nil {
-						if !errors.Is(err, ErrTaskAlreadyDispatched) {
-							t.captureError(err)
-							continue
-						}
+					err := workerPool.Invoke(map[string]interface{}{"task": task, "payload": payload})
+					if err != nil {
+						return err
 					}
-					if err := t.redisClient.ZRem(context.Background(), delayedTasksKey, payload).Err(); err != nil {
-						t.captureError(err)
-					}
-				}
 
+					counter++
+				}
 			}
 
 		case <-ctx.Done():
+			workerPool.Release()
 			return nil
 		}
 	}
 }
 
+// DispatchDelayed dispatches the task with delay
+// Note: delay is not exact and may have 1-5 seconds error
 func (t *TaskRunner) DispatchDelayed(ctx context.Context, taskName string, payload any, d time.Duration) error {
 	_, ok := t.tasks.Get(taskName)
 	if !ok {
 		return ErrTaskNotFound
+	}
+
+	if d.Seconds() < 5 {
+		return ErrFailedToScheduleNextRun
 	}
 
 	delayedTask := DelayedTask{
@@ -98,6 +129,10 @@ func (t *TaskRunner) ScheduleFor(ctx context.Context, taskName string, payload a
 	_, ok := t.tasks.Get(taskName)
 	if !ok {
 		return ErrTaskNotFound
+	}
+
+	if time.Since(executionTime).Seconds() < 5 {
+		return ErrFailedToScheduleNextRun
 	}
 
 	delayedTask := DelayedTask{
