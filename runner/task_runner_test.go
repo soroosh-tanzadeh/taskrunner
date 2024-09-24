@@ -763,7 +763,7 @@ func (t *TaskRunnerTestSuit) Test_ScheduleFor_ShouldStoreTaskForGivenTime() {
 		},
 	})
 	expectedTime := time.Now().Add(time.Minute)
-	taskRunner.ScheduleFor(context.Background(), "task", "Hello world", expectedTime)
+	t.Assert().Nil(taskRunner.ScheduleFor(context.Background(), "task", "Hello world", expectedTime))
 
 	entries, err := t.redisServer.ZMembers(delayedTasksKey)
 	t.Assert().Nil(err)

@@ -108,7 +108,7 @@ func (t *TaskRunner) DispatchDelayed(ctx context.Context, taskName string, paylo
 	}
 
 	if d.Seconds() < 5 {
-		return ErrFailedToScheduleNextRun
+		return ErrDurationIsSmallerThanCheckCycle
 	}
 
 	delayedTask := DelayedTask{
@@ -131,8 +131,8 @@ func (t *TaskRunner) ScheduleFor(ctx context.Context, taskName string, payload a
 		return ErrTaskNotFound
 	}
 
-	if time.Since(executionTime).Seconds() < 5 {
-		return ErrFailedToScheduleNextRun
+	if -time.Since(executionTime).Seconds() < 5 {
+		return ErrDurationIsSmallerThanCheckCycle
 	}
 
 	delayedTask := DelayedTask{

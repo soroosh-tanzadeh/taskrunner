@@ -3,24 +3,27 @@ package election
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/redis/go-redis/v9"
 )
 
 type faultyScripter struct {
-	breakFlag bool
+	breakFlag *atomic.Bool
 	client    *redis.Client
 }
 
-func NewRedisScripter(breakFlag bool, client *redis.Client) *faultyScripter {
+func NewFaultyScripter(breakFlag bool, client *redis.Client) *faultyScripter {
+	flag := &atomic.Bool{}
+	flag.Store(breakFlag)
 	return &faultyScripter{
-		breakFlag: breakFlag,
+		breakFlag: flag,
 		client:    client,
 	}
 }
 
 func (f *faultyScripter) checkBreak() error {
-	if f.breakFlag {
+	if f.breakFlag.Load() {
 		return errors.New("operation aborted: break flag is set")
 	}
 	return nil

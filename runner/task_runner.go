@@ -22,7 +22,6 @@ const (
 	ErrInvalidTaskPayload       = TaskRunnerError("ErrInvalidTaskPayload")
 
 	ErrTaskMaxRetryExceed              = TaskRunnerError("ErrTaskMaxRetryExceed")
-	ErrFailedToScheduleNextRun         = TaskRunnerError("ErrFailedToScheduleNextRun")
 	ErrUniqueForIsRequired             = TaskRunnerError("ErrUniqueForIsRequired")
 	ErrDurationIsSmallerThanCheckCycle = TaskRunnerError("ErrDurationIsSmallerThanCheckCycle")
 

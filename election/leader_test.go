@@ -3,6 +3,8 @@ package election
 import (
 	"context"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,14 +14,18 @@ import (
 )
 
 type leaderWatcher struct {
-	promoted, demoted, errored bool
+	lock                       *sync.RWMutex
+	promoted, demoted, errored *atomic.Bool
 	lastError                  error
 }
 
 func (l *leaderWatcher) reset() {
-	l.promoted = false
-	l.demoted = false
-	l.errored = false
+	l.promoted.Store(false)
+	l.demoted.Store(false)
+	l.errored.Store(false)
+
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	l.lastError = nil
 }
 
@@ -39,17 +45,20 @@ func makeRedis(t *testing.T) *redis.Client {
 
 func makeWatcher(opts Opts) (*Elector, *leaderWatcher) {
 	lead, promote, demote, err := NewElector(opts)
-	watcher := &leaderWatcher{}
+	watcher := &leaderWatcher{promoted: &atomic.Bool{}, demoted: &atomic.Bool{}, errored: &atomic.Bool{}, lock: &sync.RWMutex{}}
 	go func() {
 		for {
 			select {
 			case <-promote:
-				watcher.promoted = true
+				watcher.promoted.Store(true)
 			case <-demote:
-				watcher.demoted = true
+				watcher.demoted.Store(true)
 			case err := <-err:
-				watcher.errored = true
+				watcher.lock.Lock()
+				watcher.errored.Store(true)
 				watcher.lastError = err
+				watcher.lock.Unlock()
+
 			}
 		}
 	}()
@@ -59,7 +68,7 @@ func makeWatcher(opts Opts) (*Elector, *leaderWatcher) {
 func TestLeader(t *testing.T) {
 	cli := makeRedis(t)
 
-	cli1 := &faultyScripter{client: cli, breakFlag: false}
+	cli1 := NewFaultyScripter(false, cli)
 	leader1, watch1 := makeWatcher(Opts{
 		Redis:    cli1,
 		TTL:      1 * time.Second,
@@ -72,7 +81,7 @@ func TestLeader(t *testing.T) {
 	// Wait a sec until l1 is done
 	time.Sleep(100 * time.Millisecond)
 
-	cli2 := &faultyScripter{client: cli, breakFlag: false}
+	cli2 := NewFaultyScripter(false, cli)
 	leader2, watch2 := makeWatcher(Opts{
 		Redis:    cli2,
 		TTL:      1 * time.Second,
@@ -83,8 +92,8 @@ func TestLeader(t *testing.T) {
 	leader2.Start()
 	time.Sleep(100 * time.Millisecond)
 
-	require.True(t, watch1.promoted)
-	require.False(t, watch2.promoted)
+	require.True(t, watch1.promoted.Load())
+	require.False(t, watch2.promoted.Load())
 
 	t.Run("leader 1 retains its lease", func(t *testing.T) {
 		// Here we will wait three seconds and see whether 1 is still the leader.
@@ -92,30 +101,33 @@ func TestLeader(t *testing.T) {
 		watch1.reset()
 		watch2.reset()
 		time.Sleep(3 * time.Second)
-		assert.False(t, watch1.errored, "leader1 should not have errored")
-		assert.Nil(t, watch1.lastError)
-		assert.False(t, watch1.demoted, "leader1 should not be demoted")
-		assert.False(t, watch1.promoted, "leader1 should not be promoted")
 
-		assert.False(t, watch2.errored, "leader2 should not have errored")
+		assert.False(t, watch1.errored.Load(), "leader1 should not have errored")
+		assert.Nil(t, watch1.lastError)
+		assert.False(t, watch1.demoted.Load(), "leader1 should not be demoted")
+		assert.False(t, watch1.promoted.Load(), "leader1 should not be promoted")
+
+		assert.False(t, watch2.errored.Load(), "leader2 should not have errored")
 		assert.Nil(t, watch2.lastError)
-		assert.False(t, watch2.demoted, "leader2 should not be demoted")
-		assert.False(t, watch2.promoted, "leader2 should not be promoted")
+		assert.False(t, watch2.demoted.Load(), "leader2 should not be demoted")
+		assert.False(t, watch2.promoted.Load(), "leader2 should not be promoted")
 	})
 
 	t.Run("it automatically takes the place of another leader", func(t *testing.T) {
 		// Break leader1, wait leader2 take
 		watch1.reset()
 		watch2.reset()
-		cli1.breakFlag = true
-		time.Sleep(5 * time.Second)
-		assert.True(t, watch1.demoted, "leader1 should be demoted")
-		assert.False(t, watch1.promoted, "leader1 should not be promoted")
+		cli1.breakFlag.Store(true)
 
-		assert.False(t, watch2.errored, "leader2 should not have errored")
+		time.Sleep(5 * time.Second)
+
+		assert.True(t, watch1.demoted.Load(), "leader1 should be demoted")
+		assert.False(t, watch1.promoted.Load(), "leader1 should not be promoted")
+
+		assert.False(t, watch2.errored.Load(), "leader2 should not have errored")
 		assert.Nil(t, watch2.lastError)
-		assert.False(t, watch2.demoted, "leader2 should not be demoted")
-		assert.True(t, watch2.promoted, "leader2 should be promoted")
+		assert.False(t, watch2.demoted.Load(), "leader2 should not be demoted")
+		assert.True(t, watch2.promoted.Load(), "leader2 should be promoted")
 	})
 
 	t.Run("leader 2 retains its lease", func(t *testing.T) {
@@ -124,34 +136,36 @@ func TestLeader(t *testing.T) {
 		watch1.reset()
 		watch2.reset()
 		time.Sleep(5 * time.Second)
-		assert.False(t, watch1.demoted, "leader1 should not be demoted")
-		assert.False(t, watch1.promoted, "leader1 should not be promoted")
 
-		assert.False(t, watch2.errored, "leader2 should not have errored")
+		assert.False(t, watch1.demoted.Load(), "leader1 should not be demoted")
+		assert.False(t, watch1.promoted.Load(), "leader1 should not be promoted")
+
+		assert.False(t, watch2.errored.Load(), "leader2 should not have errored")
 		assert.Nil(t, watch2.lastError)
-		assert.False(t, watch2.demoted, "leader2 should not be demoted")
-		assert.False(t, watch2.promoted, "leader2 should not be promoted")
+		assert.False(t, watch2.demoted.Load(), "leader2 should not be demoted")
+		assert.False(t, watch2.promoted.Load(), "leader2 should not be promoted")
 	})
 
 	t.Run("leader 1 takes its state back once leader2 breaks", func(t *testing.T) {
-		cli1.breakFlag = false
-		cli2.breakFlag = true
+		cli1.breakFlag.Store(false)
+		cli2.breakFlag.Store(true)
 
 		watch1.reset()
 		watch2.reset()
 		time.Sleep(5 * time.Second)
-		assert.False(t, watch1.errored, "leader1 should not have errored")
-		assert.Nil(t, watch1.lastError)
-		assert.False(t, watch1.demoted, "leader1 should not be demoted")
-		assert.True(t, watch1.promoted, "leader1 be promoted")
 
-		assert.True(t, watch2.demoted, "leader2 should be demoted")
-		assert.False(t, watch2.promoted, "leader2 should not be promoted")
+		assert.False(t, watch1.errored.Load(), "leader1 should not have errored")
+		assert.Nil(t, watch1.lastError)
+		assert.False(t, watch1.demoted.Load(), "leader1 should not be demoted")
+		assert.True(t, watch1.promoted.Load(), "leader1 be promoted")
+
+		assert.True(t, watch2.demoted.Load(), "leader2 should be demoted")
+		assert.False(t, watch2.promoted.Load(), "leader2 should not be promoted")
 	})
 
 	t.Run("Stop", func(t *testing.T) {
-		cli2.breakFlag = false
-		cli1.breakFlag = false
+		cli2.breakFlag.Store(false)
+		cli1.breakFlag.Store(false)
 
 		err := leader1.Stop()
 		assert.NoError(t, err)
