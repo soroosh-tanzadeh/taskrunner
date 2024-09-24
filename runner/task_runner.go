@@ -64,7 +64,7 @@ type TaskRunner struct {
 
 	errorChannel chan error
 
-	timingBulkWriter TimingBulkWriter
+	tasksTimingBulkWriter *TimingBulkWriter
 
 	locker contracts.DistributedLocker
 }
@@ -83,7 +83,9 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 	if taskRunner.cfg.ReplicationFactor == 0 {
 		taskRunner.cfg.ReplicationFactor = 1
 	}
-	taskRunner.timingBulkWriter = *NewBulkWriter(time.Second, taskRunner.timingFlush)
+
+	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)
+
 	taskRunner.locker = locker.NewRedisMutexLocker(taskRunner.redisClient)
 	return taskRunner
 }
@@ -150,7 +152,7 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 }
 
 func (t *TaskRunner) shutdown() {
-	t.timingBulkWriter.close()
+	t.tasksTimingBulkWriter.close()
 }
 
 func (t *TaskRunner) Dispatch(ctx context.Context, taskName string, payload any) error {

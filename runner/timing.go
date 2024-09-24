@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,7 +19,7 @@ type timingDto struct {
 }
 
 func (t *TaskRunner) storeTiming(taskName string, x time.Duration) {
-	t.timingBulkWriter.write(timingDto{taskName: taskName, timing: x})
+	t.tasksTimingBulkWriter.write(timingDto{taskName: taskName, timing: x})
 }
 
 // timingAggregator captures a snapshot of the currently registered tasks and calculates the average execution time for each task.
@@ -70,6 +71,15 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		perTaskTiming[taskName] = avg
 	}
 
+	// Schedule timing
+	scheduleTiming, err := t.avgOfStream(t.metricsHash, "schedule"+"_avg", taskMetricStreamPrefix+":"+delayedTasksTimingKey, "-", "+", 1000, "timing")
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			t.captureError(err)
+		}
+	}
+	fmt.Println(scheduleTiming)
+
 	// calculate total average (T_avg)
 	totalExecutionAverage = totalExecutionAverage / int64(len(tasks))
 	avgTiming := totalExecutionAverage
@@ -83,6 +93,7 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		PerTaskTiming:     perTaskTiming,
 		PredictedWaitTime: float64(predictedWaitTime),
 		AvgTiming:         time.Duration(avgTiming * int64(time.Millisecond)),
+		AvgScheduleTiming: scheduleTiming,
 		TPS:               float64(1000.0) / float64(avgTiming),
 	}, nil
 }

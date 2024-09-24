@@ -14,6 +14,7 @@ import (
 )
 
 const delayedTasksKey = "taskrunner:delayed_tasks"
+const delayedTasksTimingKey = "taskrunner:delayed_tasks_schedule"
 
 func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) error {
 	workerPool, err := ants.NewPoolWithFunc(batchSize, func(arg interface{}) {
@@ -59,8 +60,7 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 
 			pages := math.Ceil(float64(count) / float64(batchSize))
 
-			// startDispatcing :=
-			counter := 0
+			startDispatcing := time.Now()
 			for page := 0; page < int(pages); page++ {
 				tasks, err := t.redisClient.ZRangeByScoreWithScores(context.Background(), delayedTasksKey, &redis.ZRangeBy{
 					Min:    "-inf",
@@ -87,10 +87,10 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 					if err != nil {
 						return err
 					}
-
-					counter++
 				}
 			}
+			dispatchDuration := time.Since(startDispatcing)
+			t.storeTiming(delayedTasksTimingKey, dispatchDuration)
 
 		case <-ctx.Done():
 			workerPool.Release()
