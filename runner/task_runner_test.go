@@ -47,7 +47,7 @@ func (t *TaskRunnerTestSuit) setupRedis() *redis.Client {
 }
 
 func (t *TaskRunnerTestSuit) setupTaskRunner(redisClient *redis.Client) (contracts.MessageQueue, *TaskRunner) {
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*10, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*10, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          5,
 		ConsumerGroup:      "test_group",
@@ -352,7 +352,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed(
 	expectedPayload := "Test Payload"
 	expectedError := errors.New("I'm Panic Error")
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
@@ -396,7 +396,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenTaskNotExist()
 	expectedPayload := "Test Payload"
 	expectedError := errors.New("I'm Panic Error")
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
@@ -440,7 +440,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenPayloadIsInval
 	expectedPayload := "INVALIDJSONPAYLOAD"
 	expectedError := errors.New("I'm Panic Error")
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
@@ -523,7 +523,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldUseTaskNameForUnique_WhenUniqueKeyIsNil(
 
 func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldAggregateAndStoreTimingAverage() {
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",
@@ -563,7 +563,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldAggregateAndStoreTiming
 func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldCallLongQueueWhenLongQueueIsHappening() {
 	callChannel := make(chan Stats)
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",
@@ -609,7 +609,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldNotCallLongQueueWhenThe
 	// The queue is expected to be empty in approximately 350 milliseconds
 	callChannel := make(chan Stats)
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          5,
 		ConsumerGroup:      "test_group",
@@ -653,7 +653,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldNotCallLongQueueWhenThe
 func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpected() {
 	callChannel := make(chan Stats)
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",
@@ -705,7 +705,7 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 
 func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() {
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",
@@ -728,7 +728,7 @@ func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() 
 
 	taskRunner.DispatchDelayed(context.Background(), "task", "Hello world", time.Minute)
 
-	entries, err := t.redisServer.ZMembers(delayedTasksKey)
+	entries, err := t.redisServer.ZMembers(taskRunner.getDelayedTasksKey())
 	t.Assert().Nil(err)
 	t.Len(entries, 1)
 
@@ -742,7 +742,7 @@ func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() 
 
 func (t *TaskRunnerTestSuit) Test_ScheduleFor_ShouldStoreTaskForGivenTime() {
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",
@@ -765,11 +765,11 @@ func (t *TaskRunnerTestSuit) Test_ScheduleFor_ShouldStoreTaskForGivenTime() {
 	expectedTime := time.Now().Add(time.Minute)
 	t.Assert().Nil(taskRunner.ScheduleFor(context.Background(), "task", "Hello world", expectedTime))
 
-	entries, err := t.redisServer.ZMembers(delayedTasksKey)
+	entries, err := t.redisServer.ZMembers(taskRunner.getDelayedTasksKey())
 	t.Assert().Nil(err)
 	t.Len(entries, 1)
 
-	score, err := t.redisServer.ZScore(delayedTasksKey, entries[0])
+	score, err := t.redisServer.ZScore(taskRunner.getDelayedTasksKey(), entries[0])
 	t.Assert().Nil(err)
 	t.Equal(expectedTime.Unix(), int64(score))
 	var delayedTask DelayedTask
@@ -784,7 +784,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldStartTaskAtExpectedTime() {
 	callChannel := make(chan time.Time)
 
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          1,
 		ConsumerGroup:      "test_group",

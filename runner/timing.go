@@ -71,7 +71,7 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	}
 
 	// Schedule timing
-	scheduleTiming, err := t.avgOfStream(t.metricsHash, "schedule"+"_avg", taskMetricStreamPrefix+":"+delayedTasksTimingKey, "-", "+", 1000, "timing")
+	scheduleTiming, err := t.avgOfStream(t.metricsHash, "schedule"+"_avg", taskMetricStreamPrefix+":"+t.getDelayedTimingTasksKey(), "-", "+", 1000, "timing")
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
 			t.captureError(err)

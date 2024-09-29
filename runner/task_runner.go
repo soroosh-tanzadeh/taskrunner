@@ -90,6 +90,10 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 	return taskRunner
 }
 
+func (t *TaskRunner) ConsumerGroup() string {
+	return t.cfg.ConsumerGroup
+}
+
 func (t *TaskRunner) GetQueue() contracts.MessageQueue {
 	return t.queue
 }
@@ -153,6 +157,7 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 
 func (t *TaskRunner) shutdown() {
 	t.tasksTimingBulkWriter.close()
+	close(t.errorChannel)
 }
 
 func (t *TaskRunner) Dispatch(ctx context.Context, taskName string, payload any) error {

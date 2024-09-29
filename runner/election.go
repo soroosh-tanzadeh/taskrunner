@@ -13,9 +13,11 @@ func (t *TaskRunner) IsLeader() bool {
 
 func (t *TaskRunner) StartElection(ctx context.Context) {
 	elector, OnPromote, onDemote, OnError := election.NewElector(election.Opts{
-		Redis: t.redisClient,
-		TTL:   time.Second * 5,
-		Wait:  time.Second * 6,
+		Redis:    t.redisClient,
+		Key:      t.ConsumerGroup(),
+		JitterMS: 5,
+		TTL:      time.Second * 5,
+		Wait:     time.Second * 6,
 	})
 
 	go func() {

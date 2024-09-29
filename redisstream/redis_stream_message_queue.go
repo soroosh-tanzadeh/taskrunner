@@ -3,6 +3,7 @@ package redisstream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -29,15 +30,18 @@ type RedisStreamMessageQueue struct {
 
 	deleteOnConsume bool
 
+	deleteOnShutdown bool
+
 	redisVersion *semver.Version
 }
 
-func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume bool) *RedisStreamMessageQueue {
+func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume, deleteOnShutdown bool) *RedisStreamMessageQueue {
 	stream := &RedisStreamMessageQueue{
 		client:                   redisClient,
 		stream:                   prefix + ":" + queue,
 		deleteOnConsume:          deleteOnConsume,
 		reClaimDelay:             reClaimDelay,
+		deleteOnShutdown:         deleteOnShutdown,
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, prefix+":metrics:"+queue),
 	}
 
@@ -245,13 +249,16 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 	consumer contracts.StreamConsumeFunc) {
 	wg := sync.WaitGroup{}
 
-	defer func() {
-		deleteConsumerCtx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-		defer cancel()
-		if err := r.client.XGroupDelConsumer(deleteConsumerCtx, r.stream, group, consumerName).Err(); err != nil {
-			log.WithError(err).Error("error occurred while deleting consumer")
-		}
-	}()
+	if r.deleteOnShutdown {
+		fmt.Print("GGHGGG")
+		defer func() {
+			deleteConsumerCtx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+			defer cancel()
+			if err := r.client.XGroupDelConsumer(deleteConsumerCtx, r.stream, group, consumerName).Err(); err != nil {
+				log.WithError(err).Error("error occurred while deleting consumer")
+			}
+		}()
+	}
 
 	wg.Add(1)
 	go func() {

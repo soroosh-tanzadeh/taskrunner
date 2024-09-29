@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"time"
@@ -13,8 +14,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const delayedTasksKey = "taskrunner:delayed_tasks"
-const delayedTasksTimingKey = "taskrunner:delayed_tasks_schedule"
+const delayedTasksKey = "taskrunner:%s:delayed_tasks"
+const delayedTasksTimingKey = "taskrunner:%s:delayed_tasks_schedule"
+
+func (t *TaskRunner) getDelayedTasksKey() string {
+	return fmt.Sprintf(delayedTasksKey, t.ConsumerGroup())
+}
+
+func (t *TaskRunner) getDelayedTimingTasksKey() string {
+	return fmt.Sprintf(delayedTasksTimingKey, t.ConsumerGroup())
+}
 
 func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) error {
 	workerPool, err := ants.NewPoolWithFunc(batchSize, func(arg interface{}) {
@@ -33,7 +42,7 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 			return
 		}
 
-		if _, err := t.redisClient.ZRem(context.Background(), delayedTasksKey, payload).Result(); err != nil {
+		if _, err := t.redisClient.ZRem(context.Background(), t.getDelayedTasksKey(), payload).Result(); err != nil {
 			t.captureError(err)
 		}
 
@@ -52,7 +61,7 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 				continue
 			}
 
-			count, err := t.redisClient.ZCount(ctx, delayedTasksKey, "0", now).Result()
+			count, err := t.redisClient.ZCount(ctx, t.getDelayedTasksKey(), "0", now).Result()
 			if err != nil {
 				t.captureError(err)
 				continue
@@ -62,7 +71,7 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 
 			startDispatcing := time.Now()
 			for page := 0; page < int(pages); page++ {
-				tasks, err := t.redisClient.ZRangeByScoreWithScores(context.Background(), delayedTasksKey, &redis.ZRangeBy{
+				tasks, err := t.redisClient.ZRangeByScoreWithScores(context.Background(), t.getDelayedTasksKey(), &redis.ZRangeBy{
 					Min:    "-inf",
 					Max:    now,
 					Count:  int64(batchSize),
@@ -90,7 +99,7 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 				}
 			}
 			dispatchDuration := time.Since(startDispatcing)
-			t.storeTiming(delayedTasksTimingKey, dispatchDuration)
+			t.storeTiming(t.getDelayedTimingTasksKey(), dispatchDuration)
 
 		case <-ctx.Done():
 			workerPool.Release()
@@ -122,7 +131,7 @@ func (t *TaskRunner) DispatchDelayed(ctx context.Context, taskName string, paylo
 		return err
 	}
 
-	return t.redisClient.ZAdd(ctx, delayedTasksKey, redis.Z{Score: float64(delayedTask.Time), Member: delayedTaskJson}).Err()
+	return t.redisClient.ZAdd(ctx, t.getDelayedTasksKey(), redis.Z{Score: float64(delayedTask.Time), Member: delayedTaskJson}).Err()
 }
 
 func (t *TaskRunner) ScheduleFor(ctx context.Context, taskName string, payload any, executionTime time.Time) error {
@@ -146,5 +155,5 @@ func (t *TaskRunner) ScheduleFor(ctx context.Context, taskName string, payload a
 		return err
 	}
 
-	return t.redisClient.ZAdd(ctx, delayedTasksKey, redis.Z{Score: float64(delayedTask.Time), Member: delayedTaskJson}).Err()
+	return t.redisClient.ZAdd(ctx, t.getDelayedTasksKey(), redis.Z{Score: float64(delayedTask.Time), Member: delayedTaskJson}).Err()
 }
