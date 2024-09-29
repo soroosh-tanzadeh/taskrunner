@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -78,7 +77,6 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 			t.captureError(err)
 		}
 	}
-	fmt.Println(scheduleTiming)
 
 	// calculate total average (T_avg)
 	totalExecutionAverage = totalExecutionAverage / int64(len(tasks))
