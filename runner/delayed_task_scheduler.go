@@ -66,6 +66,9 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 				t.captureError(err)
 				continue
 			}
+			if count == 0 {
+				continue
+			}
 
 			pages := math.Ceil(float64(count) / float64(batchSize))
 

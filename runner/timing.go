@@ -71,7 +71,7 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	}
 
 	// Schedule timing
-	scheduleTiming, err := t.avgOfStream(t.metricsHash, "schedule"+"_avg", taskMetricStreamPrefix+":"+t.getDelayedTimingTasksKey(), "-", "+", 1000, "timing")
+	scheduleTiming, err := t.avgOfStream(t.metricsHash, "schedule"+"_avg", taskMetricStreamPrefix+t.getDelayedTimingTasksKey(), "-", "+", 1000, "timing")
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
 			t.captureError(err)
@@ -92,7 +92,7 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		PredictedWaitTime: float64(predictedWaitTime),
 		AvgTiming:         time.Duration(avgTiming * int64(time.Millisecond)),
 		AvgScheduleTiming: scheduleTiming,
-		TPS:               float64(1000.0) / float64(avgTiming),
+		TPS:               (float64(1000.0) / float64(avgTiming)) * float64(t.activeWorkers.Load()) * float64(t.cfg.ReplicationFactor),
 	}, nil
 }
 
