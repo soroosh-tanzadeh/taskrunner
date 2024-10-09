@@ -2,6 +2,7 @@ package runner
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -14,6 +15,7 @@ type TimingBulkWriter struct {
 	tickerCh  <-chan time.Time
 	buf       []timingDto
 	data      chan timingDto
+	closeLock *sync.Mutex
 	closed    bool
 	quit      chan bool
 	flushFunc FlushFunc
@@ -26,6 +28,7 @@ func NewBulkWriter(flushInterval time.Duration, flushFunc FlushFunc) *TimingBulk
 		quit:      make(chan bool),
 		flushFunc: flushFunc,
 		tickerCh:  make(chan time.Time),
+		closeLock: &sync.Mutex{},
 	}
 
 	if flushInterval > 0 {
@@ -63,11 +66,6 @@ func (b *TimingBulkWriter) write(data timingDto) error {
 }
 
 func (b *TimingBulkWriter) flush() {
-	if b.closed {
-		log.Error("flushing a closed bulk.BulkWriter")
-		return
-	}
-
 	if len(b.buf) == 0 {
 		return
 	}
@@ -80,6 +78,9 @@ func (b *TimingBulkWriter) flush() {
 }
 
 func (b *TimingBulkWriter) close() {
+	b.closeLock.Lock()
+	defer b.closeLock.Unlock()
+
 	if b.closed {
 		log.Error("closing a closed bulk.BulkWriter")
 		return

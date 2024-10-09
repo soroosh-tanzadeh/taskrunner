@@ -3,3 +3,4 @@ vendor
 .vscode
 coverage.out
 .coverage
+cmd

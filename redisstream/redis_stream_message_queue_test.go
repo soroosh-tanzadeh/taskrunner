@@ -28,7 +28,7 @@ func setupClient() *redis.Client {
 func TestRedisStreamMessageQueue(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", 1, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", 1, true, true)
 
 	t.Run("Add_ShouldSetID", func(t *testing.T) {
 		msg := contracts.Message{
@@ -70,7 +70,7 @@ func TestRedisStreamMessageQueue(t *testing.T) {
 func TestRedisStreamMessageQueue_Consume_ShouldCallConsumeFunction(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -104,7 +104,7 @@ func TestRedisStreamMessageQueue_Consume_ShouldCallConsumeFunction(t *testing.T)
 func TestRedisStreamMessageQueue_Consume_ShouldDeleteMessageAfterConsume(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -145,7 +145,7 @@ func TestRedisStreamMessageQueue_Consume_ShouldDeleteMessageAfterConsume(t *test
 func TestRedisStreamMessageQueue_Consume_ShouldRetryFailedMessage(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -195,7 +195,7 @@ func TestRedisStreamMessageQueue_Consume_ShouldRetryFailedMessage(t *testing.T) 
 func Test_Delete_ShouldRemoveMessageFromStream(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
 
 	msg := contracts.Message{
 		Payload: "test payload",
@@ -213,7 +213,7 @@ func Test_Delete_ShouldRemoveMessageFromStream(t *testing.T) {
 func Test_Purge_ShouldRemoveAllMessagesFromStream(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
 
 	for i := 0; i < 10; i++ {
 		err := queue.Add(context.Background(), &contracts.Message{
@@ -232,7 +232,7 @@ func Test_Purge_ShouldRemoveAllMessagesFromStream(t *testing.T) {
 func Test_Len_ShouldReturnQueueLen(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
 
 	for i := 0; i < 10; i++ {
 		err := queue.Add(context.Background(), &contracts.Message{
@@ -245,4 +245,34 @@ func Test_Len_ShouldReturnQueueLen(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, int64(10), len)
+}
+
+func Test_ShouldNotDeleteConsumers_WhenDeleteOnShutdownIsSettedToFalse(t *testing.T) {
+	client := setupClient()
+
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, false)
+
+	for i := 0; i < 10; i++ {
+		err := queue.Add(context.Background(), &contracts.Message{
+			Payload: "test payload",
+		})
+		assert.NoError(t, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+	errorChannel := make(chan error)
+
+	go func() {
+		queue.Consume(ctx, 1, time.Second*4, "mygroup", "consumer1", errorChannel, func(ctx context.Context, msg contracts.Message, heartBeat contracts.HeartBeatFunc) error {
+			assert.Equal(t, "test payload", msg.GetPayload())
+			return nil
+		})
+	}()
+
+	<-time.After(time.Second * 5)
+	cancel()
+
+	result, _ := client.XInfoConsumers(context.Background(), "test:queue", "mygroup").Result()
+	assert.Equal(t, len(result), 1)
 }

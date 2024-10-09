@@ -10,6 +10,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
+	"github.com/soroosh-tanzadeh/taskrunner/election"
 	"github.com/soroosh-tanzadeh/taskrunner/internal/locker"
 	"github.com/soroosh-tanzadeh/taskrunner/internal/safemap"
 )
@@ -20,8 +21,9 @@ const (
 	ErrTaskNotFound             = TaskRunnerError("TaskNotFound")
 	ErrInvalidTaskPayload       = TaskRunnerError("ErrInvalidTaskPayload")
 
-	ErrTaskMaxRetryExceed  = TaskRunnerError("ErrTaskMaxRetryExceed")
-	ErrUniqueForIsRequired = TaskRunnerError("ErrUniqueForIsRequired")
+	ErrTaskMaxRetryExceed              = TaskRunnerError("ErrTaskMaxRetryExceed")
+	ErrUniqueForIsRequired             = TaskRunnerError("ErrUniqueForIsRequired")
+	ErrDurationIsSmallerThanCheckCycle = TaskRunnerError("ErrDurationIsSmallerThanCheckCycle")
 
 	// It will happen when task is setted to be Unique and another task with same name and unique key dispached
 	ErrTaskAlreadyDispatched = TaskRunnerError("ErrTaskAlreadyDispatched")
@@ -31,10 +33,15 @@ const (
 	stateInit = iota
 	stateStarting
 	stateStarted
+	stateStopped
 )
 const metricsKeyPrefix = "taskrunner:"
 
 type TaskRunner struct {
+	elector *election.Elector
+
+	isLeader *atomic.Bool
+
 	status atomic.Uint64
 
 	tasks *safemap.SafeMap[string, *Task]
@@ -57,7 +64,7 @@ type TaskRunner struct {
 
 	errorChannel chan error
 
-	timingBulkWriter TimingBulkWriter
+	tasksTimingBulkWriter *TimingBulkWriter
 
 	locker contracts.DistributedLocker
 }
@@ -70,14 +77,21 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 		wg:           sync.WaitGroup{},
 		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
 		redisClient:  client,
+		isLeader:     &atomic.Bool{},
 		errorChannel: make(chan error),
 	}
 	if taskRunner.cfg.ReplicationFactor == 0 {
 		taskRunner.cfg.ReplicationFactor = 1
 	}
-	taskRunner.timingBulkWriter = *NewBulkWriter(time.Second, taskRunner.timingFlush)
+
+	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)
+
 	taskRunner.locker = locker.NewRedisMutexLocker(taskRunner.redisClient)
 	return taskRunner
+}
+
+func (t *TaskRunner) ConsumerGroup() string {
+	return t.cfg.ConsumerGroup
 }
 
 func (t *TaskRunner) GetQueue() contracts.MessageQueue {
@@ -108,8 +122,15 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 
 	t.wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(t.cfg.LongQueueThreshold / 2)
 		defer t.wg.Done()
+
+		var ticker *time.Ticker
+		if t.cfg.LongQueueThreshold > 0 {
+			ticker = time.NewTicker(t.cfg.LongQueueThreshold / 2)
+		} else {
+			ticker = time.NewTicker(time.Minute)
+		}
+
 		for {
 			select {
 			case <-ticker.C:
@@ -124,14 +145,19 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 		panic(ErrRaceOccuredOnStart)
 	}
 
+	t.StartElection(ctx)
+
 	t.wg.Wait()
+
+	t.status.Store(stateStopped)
 
 	t.shutdown()
 	return nil
 }
 
 func (t *TaskRunner) shutdown() {
-	t.timingBulkWriter.close()
+	t.tasksTimingBulkWriter.close()
+	close(t.errorChannel)
 }
 
 func (t *TaskRunner) Dispatch(ctx context.Context, taskName string, payload any) error {
