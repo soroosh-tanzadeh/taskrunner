@@ -9,7 +9,7 @@ TaskRunner is a robust and efficient Go library designed to leverage the power o
 - **Fault Tolerance:** Includes features for automatic task retries and error handling, ensuring that system failures do not lead to task loss or inconsistencies.
 - **Simple API:** Offers a straightforward and intuitive API that makes it easy to integrate and use within your existing Go applications.
 - **Real-time Monitoring and Logging:** Integrates monitoring capabilities to track task status and performance metrics in real-time, alongside comprehensive logging for debugging and audit trails.
-- **Task Scheduler:** The Task Scheduler allows the scheduling and execution of both one-time and periodic tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. Tasks are scheduled, enqueued, and executed by workers in a distributed manner, ensuring scalability and reliability.
+- **Task Scheduler:** The Task Scheduler allows the scheduling and execution of delayed tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. Tasks are scheduled, enqueued, and executed by workers in a distributed manner, ensuring scalability and reliability.
 
 ## Task Queue
 ### Simple Example
