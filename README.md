@@ -112,49 +112,79 @@ Below is a table detailing the fields of the `Task` struct:
 
 ## Task Scheduler
 
-The Task Scheduler allows the scheduling and execution of both one-time and periodic tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. 
+The Task Scheduler allows the scheduling and execution delayed tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. 
 
+**Note** Scheduler Cycle is 5 second
 
 ### How it works?
 
-#### 1. Task Submission
+```go
+package main
 
-Users interact with the **TaskRunner** to schedule tasks.
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
 
-- **TaskScheduler** calculates the next execution time based on the time duration provided.
-- The task is then added to a Redis Sorted Set (`ZSET`), with the execution time serving as the score. This allows Redis to efficiently track when the task should be processed.
+	"github.com/redis/go-redis/v9"
+	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
+	"github.com/soroosh-tanzadeh/taskrunner/runner"
+)
 
-#### 2. Task Enqueuing
+func main() {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "127.0.0.1:6379",
+		DB:       5,
+		PoolSize: 100,
+		Password: "123456",
+	})
+	wg := sync.WaitGroup{}
 
-A go-routine, the **TaskEnqueuer**, checks the Redis Sorted Set at regular intervals to find tasks that are due for execution. (the process is atomic, and can be executed on multiple nodes without overlapping)
+	queue := redisstream.NewRedisStreamMessageQueue(rdb, "example_tasks", "default", time.Second*30, true, false)
+	taskRunner := runner.NewTaskRunner(runner.TaskRunnerConfig{
+		BatchSize:         10,
+		ConsumerGroup:     "example",
+		ConsumersPrefix:   "default",
+		NumWorkers:        10,
+		ReplicationFactor: 1,
+		LongQueueHook: func(s runner.Stats) {
+			fmt.Printf("%v \n", s)
+		},
+		LongQueueThreshold: time.Second * 30,
+	}, rdb, queue)
 
-- The **TaskEnqueuer** fetches tasks whose execution times are less than or equal to the current time.
-- These tasks are then moved from the **ZSET** to a Redis Stream, where they are ready for processing by workers.
-- After enqueuing, the task is removed from the **ZSET**.
-- The tasks are then rescheduled after calculating the next run time (if the task is unique, `UniqueFor` will be added into the next execution time).
+	taskRunner.RegisterTask(&runner.Task{
+		Name:     "exampletask",
+		MaxRetry: 10,
+		Action: func(ctx context.Context, payload any) error {
+			fmt.Printf("Hello from example task: %s\n", payload)
+			return nil
+		},
+		Unique: false,
+	})
 
-#### 3. Task Execution
+	ctx, cancel := context.WithCancel(context.Background())
 
-**Workers** consume tasks from the Redis Stream and execute them based on the task's payload and metadata.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		taskRunner.Start(ctx)
+	}()
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		taskRunner.StartDelayedSchedule(ctx, 1000)
+	}()
 
-```mermaid
-flowchart LR
-    H[Workers Consume Task from Redis Stream] --> I[Execute Task]
-	I --> J{Is Task Periodic?}
-    J --> |No| M[Task Completed]
-	J --> |Yes| B[TaskScheduler Schedules Task]
+	taskRunner.DispatchDelayed(context.Background(), "exampletask", "I'm delyed 1", time.Second*5)
+	taskRunner.DispatchDelayed(context.Background(), "exampletask", "I'm delyed 2", time.Second*10)
 
-    A[User Schedules Task] --> B[TaskSchedule]
-    subgraph Task Schedule
-    	B --> C[TaskScheduler Calculates Next Run Time]
-   	 	C --> D[TaskScheduler Adds Task to Redis ZSET]
-		D --> E[TaskEnqueuer Periodically Checks ZSET]
-        E --> F{Is Task Due?}
-		F --> G{Is current node/process leader?}
-		G --> |Yes| Q[Enqueue Task]
-        G --> |No| E
-        F --> |No| E
-    end
-	Q --> H
+	<-time.After(time.Second * 15)
+
+	cancel()
+
+	wg.Wait()
+}
 ```

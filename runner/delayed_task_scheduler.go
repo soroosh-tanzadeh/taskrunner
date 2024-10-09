@@ -63,6 +63,10 @@ func (t *TaskRunner) StartDelayedSchedule(ctx context.Context, batchSize int) er
 
 			count, err := t.redisClient.ZCount(ctx, t.getDelayedTasksKey(), "0", now).Result()
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+
 				t.captureError(err)
 				continue
 			}
