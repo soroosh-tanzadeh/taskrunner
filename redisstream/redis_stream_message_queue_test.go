@@ -28,7 +28,7 @@ func setupClient() *redis.Client {
 func TestRedisStreamMessageQueue(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", 1, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", 1, true)
 
 	t.Run("Add_ShouldSetID", func(t *testing.T) {
 		msg := contracts.Message{
@@ -70,7 +70,7 @@ func TestRedisStreamMessageQueue(t *testing.T) {
 func TestRedisStreamMessageQueue_Consume_ShouldCallConsumeFunction(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -104,7 +104,7 @@ func TestRedisStreamMessageQueue_Consume_ShouldCallConsumeFunction(t *testing.T)
 func TestRedisStreamMessageQueue_Consume_ShouldDeleteMessageAfterConsume(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*20, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -145,7 +145,7 @@ func TestRedisStreamMessageQueue_Consume_ShouldDeleteMessageAfterConsume(t *test
 func TestRedisStreamMessageQueue_Consume_ShouldRetryFailedMessage(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -195,7 +195,7 @@ func TestRedisStreamMessageQueue_Consume_ShouldRetryFailedMessage(t *testing.T) 
 func Test_Delete_ShouldRemoveMessageFromStream(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
 
 	msg := contracts.Message{
 		Payload: "test payload",
@@ -213,7 +213,7 @@ func Test_Delete_ShouldRemoveMessageFromStream(t *testing.T) {
 func Test_Purge_ShouldRemoveAllMessagesFromStream(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
 
 	for i := 0; i < 10; i++ {
 		err := queue.Add(context.Background(), &contracts.Message{
@@ -232,7 +232,7 @@ func Test_Purge_ShouldRemoveAllMessagesFromStream(t *testing.T) {
 func Test_Len_ShouldReturnQueueLen(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
 
 	for i := 0; i < 10; i++ {
 		err := queue.Add(context.Background(), &contracts.Message{
@@ -250,7 +250,7 @@ func Test_Len_ShouldReturnQueueLen(t *testing.T) {
 func Test_ShouldNotDeleteConsumers_WhenDeleteOnShutdownIsSettedToFalse(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true, false)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
 
 	for i := 0; i < 10; i++ {
 		err := queue.Add(context.Background(), &contracts.Message{

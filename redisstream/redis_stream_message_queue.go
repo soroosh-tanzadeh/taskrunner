@@ -271,6 +271,9 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 	go func() {
 		defer wg.Done()
 		ticker := time.NewTicker(time.Minute * 10)
+		if err := r.cleanup(group); err != nil {
+			errorChannel <- err
+		}
 		for {
 			select {
 			case <-ticker.C:
