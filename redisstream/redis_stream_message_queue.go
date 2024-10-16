@@ -29,8 +29,6 @@ type RedisStreamMessageQueue struct {
 
 	deleteOnConsume bool
 
-	deleteOnShutdown bool
-
 	redisVersion *semver.Version
 }
 
@@ -453,6 +451,9 @@ func (r *RedisStreamMessageQueue) cleanup(consumerGroup string) error {
 	idleThreshold := time.Minute * 10
 	consumers, err := r.client.XInfoConsumers(ctx, r.stream, consumerGroup).Result()
 	if err != nil {
+		if strings.Contains(err.Error(), "NOGROUP") {
+			return nil
+		}
 		return err
 	}
 
