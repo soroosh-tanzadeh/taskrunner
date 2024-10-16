@@ -29,6 +29,8 @@ type RedisStreamMessageQueue struct {
 
 	deleteOnConsume bool
 
+	deleteOnShutdown bool
+
 	redisVersion *semver.Version
 }
 
@@ -409,13 +411,13 @@ func (r *RedisStreamMessageQueue) processIncomingMessages(ctx context.Context,
 			}
 
 			// Remove task from PEL (Pending Entries List)
-			if err := r.Ack(ctx, group, message.GetId()); err != nil {
+			if err := r.Ack(context.Background(), group, message.GetId()); err != nil {
 				errorChannel <- err
 			}
 
 			if r.deleteOnConsume {
 				// To prevent stream from getting larger and larger we can delete task after it processed
-				if err := r.client.XDel(ctx, r.stream, message.GetId()).Err(); err != nil {
+				if err := r.client.XDel(context.Background(), r.stream, message.GetId()).Err(); err != nil {
 					errorChannel <- err
 				}
 			}
