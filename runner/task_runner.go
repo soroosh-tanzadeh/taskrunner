@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 	"github.com/soroosh-tanzadeh/taskrunner/election"
+	"github.com/soroosh-tanzadeh/taskrunner/internal/cache"
 	"github.com/soroosh-tanzadeh/taskrunner/internal/locker"
 	"github.com/soroosh-tanzadeh/taskrunner/internal/safemap"
 )
@@ -38,7 +41,11 @@ const (
 const metricsKeyPrefix = "taskrunner:"
 
 type TaskRunner struct {
+	id string
+
 	elector *election.Elector
+
+	cache *cache.Cache[string, int]
 
 	isLeader *atomic.Bool
 
@@ -67,6 +74,8 @@ type TaskRunner struct {
 	tasksTimingBulkWriter *TimingBulkWriter
 
 	locker contracts.DistributedLocker
+
+	host string
 }
 
 func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.MessageQueue) *TaskRunner {
@@ -78,11 +87,20 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
 		redisClient:  client,
 		isLeader:     &atomic.Bool{},
+		cache:        cache.New[string, int](time.Minute, time.Minute),
 		errorChannel: make(chan error),
 	}
 	if taskRunner.cfg.ReplicationFactor == 0 {
 		taskRunner.cfg.ReplicationFactor = 1
 	}
+	if len(taskRunner.cfg.Host) == 0 {
+		hostName, err := os.Hostname()
+		if err != nil {
+			hostName = uuid.NewString()
+		}
+		taskRunner.cfg.Host = hostName
+	}
+	taskRunner.host = taskRunner.cfg.Host
 
 	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)
 
@@ -119,6 +137,17 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 		t.wg.Add(1)
 		go t.addWorker(ctx, workerID)
 	}
+
+	// Register Replication
+	if err := t.registerReplication(); err != nil {
+		return err
+	}
+
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		t.startRenewReplication(ctx)
+	}()
 
 	t.wg.Add(1)
 	go func() {
