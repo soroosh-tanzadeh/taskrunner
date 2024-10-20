@@ -850,7 +850,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleReplication() {
 	}, redisClient, queue)
 	go taskRunner2.Start(context.Background())
 
-	<-time.After(time.Second * 50000000)
+	<-time.After(time.Second * 5)
 
 	replication1, _ := taskRunner1.GetNumberOfReplications()
 	replication2, _ := taskRunner2.GetNumberOfReplications()
