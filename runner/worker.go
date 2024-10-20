@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 )
@@ -161,11 +159,5 @@ func (t *TaskRunner) afterProcess(message TaskMessage) {
 }
 
 func (t *TaskRunner) consumerName() string {
-	consumerName := t.cfg.ConsumerGroup + "_"
-	if host, err := os.Hostname(); err == nil {
-		consumerName = consumerName + host
-	} else {
-		consumerName = consumerName + uuid.NewString()
-	}
-	return consumerName
+	return t.cfg.ConsumerGroup + "_" + t.host
 }

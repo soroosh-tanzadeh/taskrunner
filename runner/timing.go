@@ -43,6 +43,12 @@ func (t *TaskRunner) timingAggregator() {
 
 // GetTimingStatistics return PerTaskTiming and other estimated statistics of the queue
 func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
+	replicationFactor, err := t.GetNumberOfReplications()
+	if err != nil {
+		replicationFactor = 1
+		t.captureError(err)
+	}
+
 	// captures a snapshot of the currently registered tasks
 	tasks := t.tasks.Snapshot()
 	if len(tasks) == 0 {
@@ -86,10 +92,10 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		t.captureError(err)
 		return Stats{}, nil
 	}
-	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(t.cfg.NumWorkers)) * float64(t.cfg.ReplicationFactor))
+	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(t.cfg.NumWorkers)) * float64(replicationFactor))
 	tps := 0.0
 	if avgTiming != 0 {
-		tps = (float64(1000.0) / float64(avgTiming)) * float64(t.activeWorkers.Load()) * float64(t.cfg.ReplicationFactor)
+		tps = (float64(1000.0) / float64(avgTiming)) * float64(t.activeWorkers.Load()) * float64(replicationFactor)
 	}
 	return Stats{
 		PerTaskTiming:     perTaskTiming,

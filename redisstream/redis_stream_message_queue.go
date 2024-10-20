@@ -3,7 +3,6 @@ package redisstream
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -30,18 +29,15 @@ type RedisStreamMessageQueue struct {
 
 	deleteOnConsume bool
 
-	deleteOnShutdown bool
-
 	redisVersion *semver.Version
 }
 
-func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume, deleteOnShutdown bool) *RedisStreamMessageQueue {
+func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume bool) *RedisStreamMessageQueue {
 	stream := &RedisStreamMessageQueue{
 		client:                   redisClient,
 		stream:                   prefix + ":" + queue,
 		deleteOnConsume:          deleteOnConsume,
 		reClaimDelay:             reClaimDelay,
-		deleteOnShutdown:         deleteOnShutdown,
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, prefix+":metrics:"+queue),
 	}
 
@@ -249,17 +245,6 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 	consumer contracts.StreamConsumeFunc) {
 	wg := sync.WaitGroup{}
 
-	if r.deleteOnShutdown {
-		fmt.Print("GGHGGG")
-		defer func() {
-			deleteConsumerCtx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-			defer cancel()
-			if err := r.client.XGroupDelConsumer(deleteConsumerCtx, r.stream, group, consumerName).Err(); err != nil {
-				log.WithError(err).Error("error occurred while deleting consumer")
-			}
-		}()
-	}
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -274,6 +259,25 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 			select {
 			case <-ticker.C:
 				go r.processPendingMessages(ctx, readBatchSize, blockDuration, group, consumerName, errorChannel, consumer)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(time.Minute * 10)
+		if err := r.cleanup(group); err != nil {
+			errorChannel <- err
+		}
+		for {
+			select {
+			case <-ticker.C:
+				if err := r.cleanup(group); err != nil {
+					errorChannel <- err
+				}
 			case <-ctx.Done():
 				return
 			}
@@ -440,4 +444,28 @@ func (r *RedisStreamMessageQueue) Purge(ctx context.Context) error {
 
 func (r *RedisStreamMessageQueue) Len() (int64, error) {
 	return r.client.XLen(context.Background(), r.stream).Result()
+}
+
+func (r *RedisStreamMessageQueue) cleanup(consumerGroup string) error {
+	ctx := context.Background()
+	idleThreshold := time.Minute * 10
+	consumers, err := r.client.XInfoConsumers(ctx, r.stream, consumerGroup).Result()
+	if err != nil {
+		if strings.Contains(err.Error(), "NOGROUP") {
+			return nil
+		}
+		return err
+	}
+
+	for _, consumer := range consumers {
+		// Each consumer has an Idle field in milliseconds
+		idleDuration := consumer.Idle
+
+		if idleDuration > idleThreshold {
+			if err := r.client.XGroupDelConsumer(context.Background(), r.stream, consumerGroup, consumer.Name).Err(); err != nil {
+				log.WithError(err).Error("error occurred while deleting consumer")
+			}
+		}
+	}
+	return nil
 }
