@@ -459,7 +459,7 @@ func (r *RedisStreamMessageQueue) cleanup(consumerGroup string) error {
 
 	for _, consumer := range consumers {
 		// Each consumer has an Idle field in milliseconds
-		idleDuration := consumer.Idle * time.Millisecond
+		idleDuration := consumer.Idle
 
 		if idleDuration > idleThreshold {
 			if err := r.client.XGroupDelConsumer(context.Background(), r.stream, consumerGroup, consumer.Name).Err(); err != nil {
