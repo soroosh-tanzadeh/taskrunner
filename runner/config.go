@@ -28,4 +28,6 @@ type TaskRunnerConfig struct {
 
 	LongQueueHook      LongQueueHook
 	LongQueueThreshold time.Duration
+
+	BlockDuration time.Duration
 }

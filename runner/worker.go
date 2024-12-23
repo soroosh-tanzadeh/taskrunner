@@ -70,7 +70,10 @@ func executeTask(ctx context.Context, workerID int, task *Task, payload any, res
 func (t *TaskRunner) process(ctx context.Context, workerID int) {
 	batchSize := t.cfg.BatchSize
 	consumerName := t.consumerName() + "_" + strconv.Itoa(workerID)
-
+	// TODO: use fetchers for receiving messages in batches, then distribute them between workers
+	// TODO: Fetchers function similarly to workers, but their primary task is to claim messages and send them to a buffer,
+	// where they await being picked up by a worker.
+	// Each message has a pick timeout; if this timeout expires, the worker will re-dispatch the message back into the queue.
 	t.queue.Consume(ctx, batchSize, time.Second*5, t.cfg.ConsumerGroup, consumerName, t.errorChannel, func(ctx context.Context, m contracts.Message, hbf contracts.HeartBeatFunc) error {
 		t.inFlight.Add(1)
 		defer func() {

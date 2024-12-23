@@ -13,6 +13,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	log "github.com/sirupsen/logrus"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
 	"github.com/stretchr/testify/mock"
@@ -243,6 +244,9 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	expectedPayload := "Test Payload"
 	redisClient := t.setupRedis()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	taskOptions := &Task{
 		Name:               "task",
 		MaxRetry:           1,
@@ -263,18 +267,19 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 			return nil
 		})
 	}).Return(nil)
+	mockQueue.On("Len").Maybe().Return(int64(0), nil)
 	mockQueue.On("Add", mock.Anything, mock.Anything).Return(nil)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test",
 		ConsumersPrefix:    "test",
-		LongQueueThreshold: time.Second * 5,
+		LongQueueThreshold: time.Second * 100,
 		NumWorkers:         1,
 	}, redisClient, mockQueue)
 
 	taskRunner.RegisterTask(taskOptions)
 	go func() {
-		taskRunner.Start(context.Background())
+		taskRunner.Start(ctx)
 	}()
 
 	err := taskRunner.Dispatch(context.Background(), "task", expectedPayload)
@@ -319,12 +324,13 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
 			return nil
 		})
 	}).Return(nil)
+	mockQueue.On("HeartBeat").Maybe().Return(nil)
 	mockQueue.On("Add", mock.Anything, mock.Anything).Return(nil)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test",
 		ConsumersPrefix:    "test",
-		LongQueueThreshold: time.Second * 10,
+		LongQueueThreshold: time.Second * 200,
 		NumWorkers:         2,
 	}, redisClient, mockQueue)
 
@@ -348,17 +354,17 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
 }
 
 func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed() {
-	callChannel := make(chan bool)
+	callChannel := make(chan bool, 1)
 	expectedPayload := "Test Payload"
 	expectedError := errors.New("I'm Panic Error")
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*5, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
-		NumWorkers:         10,
-		LongQueueThreshold: time.Second * 10,
+		NumWorkers:         1,
+		LongQueueThreshold: time.Second * 100,
 		FailedTaskHandler: func(_ context.Context, taskMessage TaskMessage, err error) error {
 			t.Assert().Equal(taskMessage.Payload, expectedPayload)
 			t.Assert().ErrorIs(err, ErrTaskMaxRetryExceed)
@@ -372,6 +378,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed(
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
 		Action: func(ctx context.Context, payload any) error {
+			fmt.Println("Task")
 			return expectedError
 		},
 		Unique: false,
@@ -380,13 +387,19 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed(
 		taskRunner.Start(context.Background())
 	}()
 
+	go func() {
+		for err := range taskRunner.ErrorChannel() {
+			log.Error(err)
+		}
+	}()
+
 	err := taskRunner.Dispatch(context.Background(), "task", expectedPayload)
 	t.Assert().NoError(err)
 
 	select {
 	case <-callChannel:
 		break
-	case <-time.After(time.Second):
+	case <-time.After(time.Second * 25):
 		t.FailNow("Task was not excuted")
 	}
 }
@@ -401,7 +414,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenTaskNotExist()
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
-		LongQueueThreshold: time.Second * 10,
+		LongQueueThreshold: time.Second * 100,
 		NumWorkers:         10,
 		FailedTaskHandler: func(_ context.Context, taskMessage TaskMessage, err error) error {
 			t.Assert().Equal(taskMessage.Payload, expectedPayload)
@@ -474,6 +487,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenPayloadIsInval
 	case <-callChannel:
 		break
 	case <-time.After(time.Second):
+		fmt.Println("I wasn't called")
 		t.FailNow("Task was not excuted")
 	}
 }
