@@ -107,7 +107,6 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	}
 
 	// calculate total average (T_avg)
-	// totalExecutionAverage = totalExecutionAverage / int64(len(tasks))
 	avgTiming := totalExecutionAverage
 	queueLen, err := t.queue.Len()
 	if err != nil {

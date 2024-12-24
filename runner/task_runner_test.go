@@ -655,7 +655,6 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldNotCallLongQueueWhenThe
 }
 
 func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpected() {
-	// callChannel := make(chan Stats)
 	redisClient := t.setupRedis()
 	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
@@ -669,9 +668,6 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 			return nil
 		},
 	}, redisClient, queue)
-	// taskRunner.cfg.LongQueueHook = func(s Stats) {
-	// 	callChannel <- s
-	// }
 
 	taskRunner.RegisterTask(&Task{
 		Name:               "task",
@@ -691,8 +687,6 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 		taskRunner.Start(context.Background())
 	}()
 
-	// select {
-	// case s := <-callChannel:
 	<-time.After(time.Millisecond * 1000)
 	timing, err := taskRunner.GetTimingStatistics()
 	t.Assert().Nil(err)
@@ -702,10 +696,6 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 	t.Assert().Equal(map[string]int64{
 		"task": 500,
 	}, timing.PerTaskTiming)
-
-	// case <-time.After(time.Second * 5):
-	// 	t.FailNow("LongQueueHook not called")
-	// }
 }
 
 func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() {
