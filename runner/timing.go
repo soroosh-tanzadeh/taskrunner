@@ -3,7 +3,6 @@ package runner
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"time"
 
@@ -25,7 +24,6 @@ func (t *TaskRunner) storeTiming(taskName string, x time.Duration) {
 // The total execution time for the queue is estimated as (T_avg * Q_len) / (W_num * R_factor).
 // If the estimated time exceeds the LongQueueThreshold, a Hook is triggered to notify the User.
 func (t *TaskRunner) timingAggregator() {
-	fmt.Println("This is a test")
 	if !t.IsLeader() {
 		return
 	}
@@ -43,7 +41,6 @@ func (t *TaskRunner) timingAggregator() {
 	}
 	// Reset metrics for all tasks
 	t.resetTimingMetrics()
-	fmt.Println("This is a reset:", stats)
 }
 
 // GetTimingStatistics return PerTaskTiming and other estimated statistics of the queue
@@ -68,7 +65,6 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	// iterate over tasks
 	for taskName := range tasks {
 		totalTiming, err := t.redisClient.HGet(ctx, t.metricsHash, taskName+"_sum").Int64()
-		// fmt.Println("This is a totalTiming:", totalTiming)
 		if err != nil && !errors.Is(err, redis.Nil) {
 			t.captureError(err)
 			continue
@@ -76,7 +72,6 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		sumTasksTiming += totalTiming
 
 		count, err := t.redisClient.HGet(ctx, t.metricsHash, taskName+"_count").Int64()
-		// fmt.Println("This is a count:", count)
 		if err != nil && !errors.Is(err, redis.Nil) {
 			t.captureError(err)
 			continue
@@ -99,12 +94,10 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	var scheduleTiming int64 = 0
 	// calculate schedule timing
 	totalScheduleTiming, err := t.redisClient.HGet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_sum").Int64()
-	// fmt.Println("This is a totalScheduleTiming:", totalScheduleTiming)
 	if err != nil && !errors.Is(err, redis.Nil) {
 		t.captureError(err)
 	}
 	countSchedules, err := t.redisClient.HGet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_count").Int64()
-	// fmt.Println("This is a countSchedules:", countSchedules)
 	if err != nil && !errors.Is(err, redis.Nil) {
 		t.captureError(err)
 	}
@@ -143,10 +136,6 @@ func (t *TaskRunner) resetTimingMetrics() {
 		for taskName := range taskKeys {
 			p.HSet(ctx, t.metricsHash, taskName+"_sum", 0)
 			p.HSet(ctx, t.metricsHash, taskName+"_count", 0)
-			// totalTiming, _ := t.redisClient.HGet(ctx, t.metricsHash, taskName+"_sum").Int64()
-			// fmt.Println("This is a totalTiming:", totalTiming)
-			// count, _ := t.redisClient.HGet(ctx, t.metricsHash, taskName+"_count").Int64()
-			// fmt.Println("This is a count:", count)
 		}
 		p.HSet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_sum", 0)
 		p.HSet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_count", 0)
@@ -162,9 +151,6 @@ func (t *TaskRunner) timingFlush(buf []timingDto) error {
 	ctx := context.Background()
 	_, err := t.redisClient.Pipelined(ctx, func(p redis.Pipeliner) error {
 		for _, timing := range buf {
-			// fmt.Println("This is a log:", timing.taskName+"_sum")
-			// fmt.Println("This is another log:", t.metricsHash)
-			// fmt.Println("This is 3rd log:", timing.timing.Milliseconds())
 			p.HIncrBy(ctx, t.metricsHash, timing.taskName+"_sum", timing.timing.Milliseconds())
 			p.HIncrBy(ctx, t.metricsHash, timing.taskName+"_count", 1)
 		}
