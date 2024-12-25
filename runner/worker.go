@@ -4,52 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 )
 
-func (t *TaskRunner) addWorker(ctx context.Context, workerID int) {
-	t.activeWorkers.Add(1)
-
-	defer t.wg.Done()
-	defer t.activeWorkers.Add(-1)
-	defer func() {
-		r := recover()
-		if r != nil {
-			err, ok := r.(error)
-			logEntry := log.WithField("worker_id", workerID).WithField("cause", r)
-			if ok {
-				logEntry = logEntry.WithError(err)
-			}
-			logEntry.Error("Woker Panic")
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			// Add new process to keep number of workers constant
-			t.wg.Add(1)
-			go func() {
-				defer t.wg.Done()
-				t.addWorker(ctx, int(t.activeWorkers.Add(1)))
-			}()
-		}
-	}()
-
-	t.process(ctx, workerID)
+func (t *TaskRunner) workerPanicHandler(r interface{}) {
+	err, ok := r.(error)
+	if ok {
+		log.Errorf("Worker panic: %s", err.Error())
+	} else {
+		log.Errorf("Worker panic: %v", err)
+	}
 }
 
-func executeTask(ctx context.Context, workerID int, task *Task, payload any, resultChannel chan any) {
-	// Close channel to prevent infinit for-loop
+func executeTask(ctx context.Context, task *Task, payload any, resultChannel chan any) {
 	defer close(resultChannel)
+
 	// Handle Panic
 	defer func() {
 		if r := recover(); r != nil {
 			err, ok := r.(error)
-			logEntry := log.WithField("worker_id", workerID).WithField("cause", r)
+			logEntry := log.WithField("cause", r)
 			if ok {
 				logEntry = logEntry.WithError(err)
 				resultChannel <- NewTaskExecutionError(task.Name, err)
@@ -67,88 +43,94 @@ func executeTask(ctx context.Context, workerID int, task *Task, payload any, res
 	resultChannel <- true
 }
 
-func (t *TaskRunner) process(ctx context.Context, workerID int) {
-	batchSize := t.cfg.BatchSize
-	consumerName := t.consumerName() + "_" + strconv.Itoa(workerID)
-	// TODO: use fetchers for receiving messages in batches, then distribute them between workers
-	// TODO: Fetchers function similarly to workers, but their primary task is to claim messages and send them to a buffer,
-	// where they await being picked up by a worker.
-	// Each message has a pick timeout; if this timeout expires, the worker will re-dispatch the message back into the queue.
-	t.queue.Consume(ctx, batchSize, time.Second*5, t.cfg.ConsumerGroup, consumerName, t.errorChannel, func(ctx context.Context, m contracts.Message, hbf contracts.HeartBeatFunc) error {
-		t.inFlight.Add(1)
-		defer func() {
-			t.inFlight.Add(-1)
-		}()
-		failed := func() {
-			t.fails.Add(1)
-		}
+func (t *TaskRunner) worker(i interface{}) {
+	ctx := context.Background()
+	arg := i.(fetchedMessage)
 
-		// Start Time Tracking
-		timeStart := time.Now()
+	m := arg.message
+	consumerName := arg.consumer
 
-		messagePayload := m.Payload
+	t.inFlight.Add(1)
+	defer func() {
+		t.inFlight.Add(-1)
+	}()
+	failed := func() {
+		t.fails.Add(1)
+	}
 
-		taskMessage := TaskMessage{}
-		if err := json.Unmarshal([]byte(messagePayload), &taskMessage); err != nil {
-			log.WithError(err).WithField("payload", m.Payload).Error("Can not parse message payload")
-			failed()
-			// When message payload is invalid retrying is meaningless
-			return t.cfg.FailedTaskHandler(ctx, TaskMessage{Payload: m.Payload}, ErrInvalidTaskPayload)
-		}
+	// Start Time Tracking
+	timeStart := time.Now()
 
-		task, ok := t.tasks.Get(taskMessage.TaskName)
-		if !ok {
-			log.WithError(ErrTaskNotFound).Errorf("task %s not not fond", taskMessage.TaskName)
-			failed()
-			// Handle failed task (Store in database, Reschedule or etc.)
-			// If failed task handler fails, it will be retried in next cycle
-			return t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskNotFound)
-		}
+	messagePayload := m.Payload
 
-		// Handle Max retry
-		if task.MaxRetry == 0 {
-			task.MaxRetry = 1
-		}
+	taskMessage := TaskMessage{}
+	if err := json.Unmarshal([]byte(messagePayload), &taskMessage); err != nil {
+		log.WithError(err).WithField("payload", m.Payload).Error("Can not parse message payload")
+		failed()
+		// When message payload is invalid retrying is meaningless
+		t.cfg.FailedTaskHandler(ctx, TaskMessage{Payload: m.Payload}, ErrInvalidTaskPayload)
+		return
+	}
 
-		if task.MaxRetry < int(m.GetReceiveCount()) {
-			log.WithError(ErrTaskMaxRetryExceed).Errorf("task %s max retry exceed", taskMessage.TaskName)
-			failed()
-			// Handle failed task (Store in database, Reschedule or etc.)
-			// If failed task handler fails, it will be retried in next cycle
-			return t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskMaxRetryExceed)
-		}
+	task, ok := t.tasks.Get(taskMessage.TaskName)
+	if !ok {
+		log.WithError(ErrTaskNotFound).Errorf("task %s not not fond", taskMessage.TaskName)
+		failed()
+		// Handle failed task (Store in database, Reschedule or etc.)
+		// If failed task handler fails, it will be retried in next cycle
+		t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskNotFound)
+		return
+	}
 
-		// defer update timing to be update timing metrics
-		defer func() { t.storeTiming(task.Name, time.Since(timeStart)) }()
+	// Handle Max retry
+	if task.MaxRetry == 0 {
+		task.MaxRetry = 1
+	}
 
-		// Release Lock and etc...
-		defer t.afterProcess(taskMessage)
+	if task.MaxRetry < int(m.GetReceiveCount()) {
+		log.WithError(ErrTaskMaxRetryExceed).Errorf("task %s max retry exceed", taskMessage.TaskName)
+		failed()
+		// Handle failed task (Store in database, Reschedule or etc.)
+		// If failed task handler fails, it will be retried in next cycle
+		t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskMaxRetryExceed)
+		return
+	}
 
-		// Execute Task
-		resultChannel := make(chan any)
+	// defer update timing to be update timing metrics
+	defer func() {
+		t.storeTiming(task.Name, time.Since(timeStart))
+	}()
 
-		go executeTask(ctx, workerID, task, taskMessage.Payload, resultChannel)
+	// Release Lock and etc...
+	defer t.afterProcess(taskMessage)
 
-		// Wait for execution result
-		for {
-			select {
-			// Task Execution Finished
-			case result := <-resultChannel:
-				if _, ok := result.(bool); !ok {
-					failed()
-					return result.(TaskExecutionError)
-				}
-				t.processed.Add(1)
-				return nil
+	// Execute Task
+	resultChannel := make(chan any, 1)
 
-			// Task execution is taking time, send heartbeat to prevent reClaim
-			case <-time.After(task.ReservationTimeout):
-				if err := hbf(ctx); err != nil {
+	go executeTask(ctx, task, taskMessage.Payload, resultChannel)
+
+	// Wait for execution result
+	for {
+		select {
+		// Task Execution Finished
+		case result := <-resultChannel:
+			if _, ok := result.(bool); !ok {
+				failed()
+				t.captureError(result.(TaskExecutionError))
+			} else {
+				t.queue.Ack(ctx, t.ConsumerGroup(), m.GetId())
+			}
+			t.processed.Add(1)
+			return
+		// Task execution is taking time, send heartbeat to prevent reClaim
+		case <-time.After(task.ReservationTimeout):
+			if t.queue.RequireHeartHeartBeat() {
+				if err := t.queue.HeartBeat(ctx, t.ConsumerGroup(), consumerName, m.GetId()); err != nil {
 					t.captureError(err)
 				}
 			}
 		}
-	})
+	}
 }
 
 func (t *TaskRunner) afterProcess(message TaskMessage) {

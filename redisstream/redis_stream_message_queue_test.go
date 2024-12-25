@@ -381,7 +381,7 @@ func TestRedisStreamMessageQueue_Fetch(t *testing.T) {
 
 		<-time.After(time.Millisecond * 1200) // 1.2 seconds
 
-		queue.HeartBeat(ctx, "testgroup", "testconsumer", msg.ID)
+		assert.NoError(t, queue.HeartBeat(ctx, "testgroup", "testconsumer", msg.ID))
 
 		messages, err = queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
 		assert.NoError(t, err)

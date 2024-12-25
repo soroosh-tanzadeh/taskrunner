@@ -31,7 +31,7 @@ type RedisStreamMessageQueue struct {
 
 	messageProcessingMetrics *ring.RedisRing
 
-	deleteOnConsume bool
+	deleteOnAck bool
 
 	redisVersion *semver.Version
 
@@ -39,11 +39,11 @@ type RedisStreamMessageQueue struct {
 	checkPendingLock     *sync.Mutex
 }
 
-func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume bool) *RedisStreamMessageQueue {
+func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnAck bool) *RedisStreamMessageQueue {
 	stream := &RedisStreamMessageQueue{
 		client:                   redisClient,
 		stream:                   prefix + ":" + queue,
-		deleteOnConsume:          deleteOnConsume,
+		deleteOnAck:              deleteOnAck,
 		reClaimDelay:             reClaimDelay,
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, prefix+":metrics:"+queue),
 		checkPendingLock:         &sync.Mutex{},
@@ -368,6 +368,14 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 // Ack acknowledges the processing of a specific message by its ID.
 func (r *RedisStreamMessageQueue) Ack(ctx context.Context, group, messageId string) error {
 	_, err := r.client.XAck(ctx, r.stream, group, messageId).Result()
+
+	if r.deleteOnAck {
+		// To prevent stream from getting larger and larger we can delete task after it processed
+		if err := r.client.XDel(ctx, r.stream, messageId).Err(); err != nil {
+			log.Error(err)
+		}
+	}
+
 	return err
 }
 
@@ -415,13 +423,6 @@ func (r *RedisStreamMessageQueue) processIncomingMessages(ctx context.Context,
 			// Remove task from PEL (Pending Entries List)
 			if err := r.Ack(context.Background(), group, message.GetId()); err != nil {
 				errorChannel <- err
-			}
-
-			if r.deleteOnConsume {
-				// To prevent stream from getting larger and larger we can delete task after it processed
-				if err := r.client.XDel(context.Background(), r.stream, message.GetId()).Err(); err != nil {
-					errorChannel <- err
-				}
 			}
 
 			// storing metrics should not interrupt message processing

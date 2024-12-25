@@ -17,5 +17,5 @@ type MessageQueue interface {
 	Purge(ctx context.Context) error                                                                                                                              // Clears all messages from the queue.
 	Ack(ctx context.Context, group, messageId string) error                                                                                                       // Acknowledges the processing of a message.
 	RequireHeartHeartBeat() bool                                                                                                                                  // Indicates if a heartbeat is required for message processing.
-	HeartBeat(ctx context.Context, consumer, group, messageId string) error                                                                                       // Sends a heartbeat for a specific message.                                                                       // Sends a heartbeat for a specific message.
+	HeartBeat(ctx context.Context, group, consumer, messageId string) error                                                                                       // Sends a heartbeat for a specific message.                                                                       // Sends a heartbeat for a specific message.
 }
