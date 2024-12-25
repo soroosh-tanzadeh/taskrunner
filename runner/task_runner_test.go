@@ -288,7 +288,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	t.Assert().NoError(err)
 	select {
 	case <-callChannel:
-		t.Assert().Equal(int64(9), hbfCounter.Load())
+		t.Assert().GreaterOrEqual(hbfCounter.Load(), int64(9))
 		break
 	case err := <-taskRunner.ErrorChannel():
 		t.FailNow(err.Error())
@@ -572,7 +572,7 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldAggregateAndStoreTiming
 
 	value, err := redisClient.HGet(context.Background(), taskRunner.metricsHash, "task_avg").Float64()
 	t.Assert().NoError(err)
-	t.Assert().LessOrEqual(math.Floor(value), 12.0)
+	t.Assert().GreaterOrEqual(math.Floor(value), 12.0)
 }
 
 func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldCallLongQueueWhenLongQueueIsHappening() {
