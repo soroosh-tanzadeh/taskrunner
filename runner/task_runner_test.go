@@ -522,48 +522,6 @@ func (t *TaskRunnerTestSuit) Test_ShouldUseTaskNameForUnique_WhenUniqueKeyIsNil(
 	t.Assert().NotEmpty(v)
 }
 
-// func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldAggregateAndStoreTimingAverage() {
-// 	redisClient := t.setupRedis()
-// 	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
-// 	taskRunner := NewTaskRunner(TaskRunnerConfig{
-// 		BatchSize:          1,
-// 		ConsumerGroup:      "test_group",
-// 		ConsumersPrefix:    "taskrunner",
-// 		NumWorkers:         1,
-// 		LongQueueThreshold: time.Millisecond,
-// 		ReplicationFactor:  1,
-// 		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
-// 			return nil
-// 		},
-// 	}, redisClient, queue)
-// 	taskRunner.RegisterTask(&Task{
-// 		Name:               "task",
-// 		MaxRetry:           3,
-// 		ReservationTimeout: time.Millisecond,
-// 		Action: func(ctx context.Context, payload any) error {
-// 			<-time.After(time.Millisecond * 10)
-// 			return nil
-// 		},
-// 	})
-// 	for i := 0; i < 5; i++ {
-// 		err := taskRunner.Dispatch(context.Background(), "task", "test")
-// 		t.Assert().NoError(err)
-// 	}
-
-// 	go func() {
-// 		taskRunner.Start(context.Background())
-// 	}()
-
-// 	<-time.After(time.Second * 5)
-
-// 	sum, err := redisClient.HGet(context.Background(), taskRunner.metricsHash, "task_sum").Float64()
-// 	t.Assert().NoError(err)
-// 	count, err := redisClient.HGet(context.Background(), taskRunner.metricsHash, "task_count").Float64()
-// 	t.Assert().NoError(err)
-// 	fmt.Println("avg:", sum)
-// 	t.Assert().True(math.Floor(sum/count)<= 12.0)
-// }
-
 func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldCallLongQueueWhenLongQueueIsHappening() {
 	callChannel := make(chan Stats)
 	redisClient := t.setupRedis()

@@ -80,8 +80,7 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 
 		if count > 0 {
 			// calculate average execution of task
-			avg := int64(totalTiming / count)
-			perTaskTiming[taskName] = avg
+			perTaskTiming[taskName] = int64(totalTiming / count)
 		}
 	}
 
