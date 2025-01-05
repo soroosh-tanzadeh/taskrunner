@@ -9,10 +9,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Task Timing key taskrunner:metrics:*
-// e.g. TaskSLLSetup will be taskrunner:metrics:sslsetup
-const taskMetricStreamPrefix = "taskrunner:metrics:"
-
 type timingDto struct {
 	timing   time.Duration
 	taskName string
@@ -28,6 +24,9 @@ func (t *TaskRunner) storeTiming(taskName string, x time.Duration) {
 // The total execution time for the queue is estimated as (T_avg * Q_len) / (W_num * R_factor).
 // If the estimated time exceeds the LongQueueThreshold, a Hook is triggered to notify the User.
 func (t *TaskRunner) timingAggregator() {
+	if !t.IsLeader() {
+		return
+	}
 	stats, err := t.GetTimingStatistics()
 	if err != nil {
 		t.captureError(err)
@@ -40,6 +39,8 @@ func (t *TaskRunner) timingAggregator() {
 			t.cfg.LongQueueHook(stats)
 		}
 	}
+	// Reset metrics for all tasks
+	t.resetTimingMetrics()
 }
 
 // GetTimingStatistics return PerTaskTiming and other estimated statistics of the queue
@@ -56,37 +57,55 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		return Stats{}, nil
 	}
 
-	var totalExecutionAverage int64 = 0
+	var sumTasksTiming int64 = 0
+	var countTasks int64 = 0
 	perTaskTiming := make(map[string]int64)
+
+	ctx := context.Background()
 	// iterate over tasks
 	for taskName := range tasks {
-		stream := taskMetricStreamPrefix + taskName
-		// get average execution of task
-		avg, err := t.avgOfStream(t.metricsHash, taskName+"_avg", stream, "-", "+", 1000, "timing")
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				continue
-			}
-
+		totalTiming, err := t.redisClient.HGet(ctx, t.metricsHash, taskName+"_sum").Int64()
+		if err != nil && !errors.Is(err, redis.Nil) {
 			t.captureError(err)
 			continue
 		}
+		sumTasksTiming += totalTiming
 
-		// add the average to totalExecutionAverage (T_avg function comments)
-		totalExecutionAverage += avg
-		perTaskTiming[taskName] = avg
-	}
-
-	// Schedule timing
-	scheduleTiming, err := t.avgOfStream(t.metricsHash, "schedule"+"_avg", taskMetricStreamPrefix+t.getDelayedTimingTasksKey(), "-", "+", 1000, "timing")
-	if err != nil {
-		if !errors.Is(err, redis.Nil) {
+		count, err := t.redisClient.HGet(ctx, t.metricsHash, taskName+"_count").Int64()
+		if err != nil && !errors.Is(err, redis.Nil) {
 			t.captureError(err)
+			continue
+		}
+		countTasks += count
+
+		if count > 0 {
+			// calculate average execution of task
+			perTaskTiming[taskName] = int64(totalTiming / count)
 		}
 	}
 
 	// calculate total average (T_avg)
-	totalExecutionAverage = totalExecutionAverage / int64(len(tasks))
+	var totalExecutionAverage int64 = 0
+	if countTasks > 0 {
+		totalExecutionAverage = int64(sumTasksTiming / countTasks)
+	}
+
+	var scheduleTiming int64 = 0
+	// calculate schedule timing
+	totalScheduleTiming, err := t.redisClient.HGet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_sum").Int64()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		t.captureError(err)
+	}
+	countSchedules, err := t.redisClient.HGet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_count").Int64()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		t.captureError(err)
+	}
+
+	if countSchedules > 0 {
+		scheduleTiming = int64(totalScheduleTiming / countSchedules)
+	}
+
+	// calculate total average (T_avg)
 	avgTiming := totalExecutionAverage
 	queueLen, err := t.queue.Len()
 	if err != nil {
@@ -107,18 +126,31 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	}, nil
 }
 
+func (t *TaskRunner) resetTimingMetrics() {
+	ctx := context.Background()
+	taskKeys := t.tasks.Snapshot()
+
+	_, err := t.redisClient.Pipelined(ctx, func(p redis.Pipeliner) error {
+		for taskName := range taskKeys {
+			p.HSet(ctx, t.metricsHash, taskName+"_sum", 0)
+			p.HSet(ctx, t.metricsHash, taskName+"_count", 0)
+		}
+		p.HSet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_sum", 0)
+		p.HSet(ctx, t.metricsHash, t.getDelayedTimingTasksKey()+"_count", 0)
+		return nil
+	})
+
+	if err != nil {
+		t.captureError(err)
+	}
+}
+
 func (t *TaskRunner) timingFlush(buf []timingDto) error {
 	ctx := context.Background()
 	_, err := t.redisClient.Pipelined(ctx, func(p redis.Pipeliner) error {
 		for _, timing := range buf {
-			p.XAdd(ctx, &redis.XAddArgs{
-				Stream: taskMetricStreamPrefix + timing.taskName,
-				MaxLen: 1000,
-				Approx: false,
-				Values: map[string]any{
-					"timing": timing.timing.Milliseconds(),
-				},
-			})
+			p.HIncrBy(ctx, t.metricsHash, timing.taskName+"_sum", timing.timing.Milliseconds())
+			p.HIncrBy(ctx, t.metricsHash, timing.taskName+"_count", 1)
 		}
 		return nil
 	})
