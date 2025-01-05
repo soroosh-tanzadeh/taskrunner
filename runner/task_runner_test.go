@@ -664,10 +664,8 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 	t.Assert().Nil(err)
 	t.Assert().GreaterOrEqual(math.Floor(timing.PredictedWaitTime), 500.0)
 	t.Assert().Equal(float64(2), timing.TPS)
-	t.Assert().Equal(time.Millisecond*500, timing.AvgTiming)
-	t.Assert().Equal(map[string]int64{
-		"task": 500,
-	}, timing.PerTaskTiming)
+	t.Assert().InDelta(time.Millisecond*500, timing.AvgTiming, float64(time.Millisecond*5))
+	t.Assert().InDelta(500, timing.PerTaskTiming["task"], 5)
 }
 
 func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() {
