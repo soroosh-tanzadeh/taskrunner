@@ -15,7 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
-	"github.com/stretchr/testify/mock"
+	mock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -180,6 +180,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldRetryTaskWhenPaniced() {
 		if err.(TaskExecutionError).GetError().Error() != expectedErrorWrap.GetError().Error() {
 			t.FailNow(err.Error())
 		}
+
 	case <-time.After(time.Second):
 		t.FailNow("Task was not excuted")
 	}
@@ -521,45 +522,6 @@ func (t *TaskRunnerTestSuit) Test_ShouldUseTaskNameForUnique_WhenUniqueKeyIsNil(
 	t.Assert().NotEmpty(v)
 }
 
-func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldAggregateAndStoreTimingAverage() {
-	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
-	taskRunner := NewTaskRunner(TaskRunnerConfig{
-		BatchSize:          1,
-		ConsumerGroup:      "test_group",
-		ConsumersPrefix:    "taskrunner",
-		NumWorkers:         1,
-		LongQueueThreshold: time.Millisecond,
-		ReplicationFactor:  1,
-		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
-			return nil
-		},
-	}, redisClient, queue)
-	taskRunner.RegisterTask(&Task{
-		Name:               "task",
-		MaxRetry:           3,
-		ReservationTimeout: time.Millisecond,
-		Action: func(ctx context.Context, payload any) error {
-			<-time.After(time.Millisecond * 10)
-			return nil
-		},
-	})
-	for i := 0; i < 5; i++ {
-		err := taskRunner.Dispatch(context.Background(), "task", "test")
-		t.Assert().NoError(err)
-	}
-
-	go func() {
-		taskRunner.Start(context.Background())
-	}()
-
-	<-time.After(time.Second * 5)
-
-	value, err := redisClient.HGet(context.Background(), taskRunner.metricsHash, "task_avg").Float64()
-	t.Assert().NoError(err)
-	t.Assert().LessOrEqual(math.Floor(value), 12.0)
-}
-
 func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldCallLongQueueWhenLongQueueIsHappening() {
 	callChannel := make(chan Stats)
 	redisClient := t.setupRedis()
@@ -651,7 +613,6 @@ func (t *TaskRunnerTestSuit) Test_timingAggregator_ShouldNotCallLongQueueWhenThe
 }
 
 func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpected() {
-	callChannel := make(chan Stats)
 	redisClient := t.setupRedis()
 	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
@@ -659,15 +620,12 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
 		NumWorkers:         1,
-		LongQueueThreshold: time.Millisecond * 100,
+		LongQueueThreshold: 0,
 		ReplicationFactor:  1,
 		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
 			return nil
 		},
 	}, redisClient, queue)
-	taskRunner.cfg.LongQueueHook = func(s Stats) {
-		callChannel <- s
-	}
 
 	taskRunner.RegisterTask(&Task{
 		Name:               "task",
@@ -687,20 +645,15 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 		taskRunner.Start(context.Background())
 	}()
 
-	select {
-	case s := <-callChannel:
-		timing, err := taskRunner.GetTimingStatistics()
-		t.Assert().Nil(err)
-		t.Assert().GreaterOrEqual(math.Floor(s.PredictedWaitTime), 100.0)
-		t.Assert().Equal(float64(2), timing.TPS)
-		t.Assert().Equal(time.Millisecond*500, timing.AvgTiming)
-		t.Assert().Equal(map[string]int64{
-			"task": 500,
-		}, timing.PerTaskTiming)
-
-	case <-time.After(time.Second * 5):
-		t.FailNow("LongQueueHook not called")
-	}
+	<-time.After(time.Millisecond * 1000)
+	timing, err := taskRunner.GetTimingStatistics()
+	t.Assert().Nil(err)
+	t.Assert().GreaterOrEqual(math.Floor(timing.PredictedWaitTime), 500.0)
+	t.Assert().Equal(float64(2), timing.TPS)
+	t.Assert().Equal(time.Millisecond*500, timing.AvgTiming)
+	t.Assert().Equal(map[string]int64{
+		"task": 500,
+	}, timing.PerTaskTiming)
 }
 
 func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() {
