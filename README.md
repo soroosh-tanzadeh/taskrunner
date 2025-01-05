@@ -2,7 +2,6 @@
 TaskRunner is a robust and efficient Go library designed to leverage the power of **Redis Streams** for distributed task execution.
 
 
-
 ## Key Features
 - **Asynchronous task Processing:** TaskRunner enables the scheduling and execution of tasks asynchronously, allowing your application to remain responsive and performant under heavy load.
 - **Scalable and Distributed:** Designed to scale horizontally, this library can expand its capacity by adding more workers without impacting the existing infrastructure. It supports seamless distribution of tasks across a cluster of servers, optimizing resource usage and balancing the load.
@@ -42,6 +41,7 @@ func main() {
 		ConsumerGroup:     "example",
 		ConsumersPrefix:   "default",
 		NumWorkers:        10,
+		NumFetchers: 	   10,
 		ReplicationFactor: 1,
 		LongQueueHook: func(s runner.Stats) {
 			fmt.Printf("%v \n", s)
@@ -84,15 +84,14 @@ Below is a detailed description of each parameter in the `TaskRunnerConfig` stru
 | `ConsumerGroup`      | `string`             | The name of the consumer group used in Redis Streams to differentiate between different sets of consumers.         |
 | `ConsumersPrefix`    | `string`             | A prefix used for naming consumers within the group, aiding in identification and management.                       |
 | `NumWorkers`         | `int`                | The number of consumer workers that will concurrently process tasks from the queue.                                 |
-| `ReplicationFactor`  | `int`                | ReplicationFactor Number of pod replicas configured. Let T_avg be the average execution time of task, Q_len be the length of the queue, and W_num be the number of workers. The total execution time for the queue is estimated as **(T_avg * Q_len) / (W_num * ReplicationFactor)**.|
-| `FailedTaskHandler`  | `FailedTaskHandler`  | When task can not be retried any more, this function will be called|
+| `NumFetchers`        | `int`                |  Defines the number of concurrent fetchers that retrieve tasks from the queue and distribute them to the worker pool. Each fetcher retrieves the number of messages specified in `BatchSize`. |
+| ~~`ReplicationFactor`~~  | `int`                | **Deprecated**. ReplicationFactor Number of pod replicas configured. Let T_avg be the average execution time of task, Q_len be the length of the queue, and W_num be the number of workers. The total execution time for the queue is estimated as **(T_avg * Q_len) / (W_num * ReplicationFactor)**.|
+| `FailedTaskHandler`  | `FailedTaskHandler`  | When a task can no longer be retried, this function will be called.                                                |
 | `LongQueueHook`      | `LongQueueHook`      | A hook function or callback that is triggered when the task queue length exceeds a specified threshold.             |
 | `LongQueueThreshold` | `time.Duration`      | The duration or length of the queue that triggers the `LongQueueHook` when exceeded.                                |
 
-This configuration is critical for efficiently managing and operating asynchronous task processing systems, especially in environments where task distribution and fault tolerance are key.
-
-**Recommendation**: 
-For optimal performance with long-running tasks, it is recommended to use a small BatchSize coupled with a large number of NumWorkers. This configuration ensures that tasks are distributed more evenly across workers, reducing bottlenecks and improving overall efficiency.
+**Recommendation**:
+For optimal performance with long-running tasks, it is recommended to use a larger `BatchSize` coupled with a large number of `NumWorkers` and a small `NumFetchers`. This configuration ensures that tasks are distributed more evenly across workers, reducing bottlenecks and improving overall efficiency.
 
 ### Task Paramters
 
@@ -114,8 +113,9 @@ Below is a table detailing the fields of the `Task` struct:
 
 The Task Scheduler allows the scheduling and execution delayed tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. 
 
-**Note** Scheduler Cycle is 5 second
-
+**Note**  The scheduler operates on a 5-second cycle. Tasks with a delay shorter than this cycle will still be processed in the next cycle. For example:
+- A task with a 2-second delay will execute after 5 seconds.
+- A task with a 6-second delay will execute after 10 seconds.
 ### How it works?
 
 ```go
@@ -147,6 +147,7 @@ func main() {
 		ConsumerGroup:     "example",
 		ConsumersPrefix:   "default",
 		NumWorkers:        10,
+		NumFetchers: 	   10,
 		ReplicationFactor: 1,
 		LongQueueHook: func(s runner.Stats) {
 			fmt.Printf("%v \n", s)
