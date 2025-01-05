@@ -18,6 +18,10 @@ import (
 const payloadKey = "payload"
 const metricsSampleSize = 1000
 
+// RedisStreamMessageQueue represents a message queue implemented using Redis streams.
+// Messages require heartbeats to prevent reclaiming by other consumers in Redis Streams. (Do not forget to call HeartBeat function, while using Fetch)
+// It supports features like pending message processing, metrics collection, and automatic
+// message acknowledgment and deletion after consumption.
 type RedisStreamMessageQueue struct {
 	client *redis.Client
 
@@ -27,18 +31,22 @@ type RedisStreamMessageQueue struct {
 
 	messageProcessingMetrics *ring.RedisRing
 
-	deleteOnConsume bool
+	deleteOnAck bool
 
 	redisVersion *semver.Version
+
+	lastPendingCheckTime time.Time
+	checkPendingLock     *sync.Mutex
 }
 
-func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnConsume bool) *RedisStreamMessageQueue {
+func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnAck bool) *RedisStreamMessageQueue {
 	stream := &RedisStreamMessageQueue{
 		client:                   redisClient,
 		stream:                   prefix + ":" + queue,
-		deleteOnConsume:          deleteOnConsume,
+		deleteOnAck:              deleteOnAck,
 		reClaimDelay:             reClaimDelay,
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, prefix+":metrics:"+queue),
+		checkPendingLock:         &sync.Mutex{},
 	}
 
 	redisInfo, _ := redisClient.InfoMap(context.Background()).Result()
@@ -52,6 +60,7 @@ func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string,
 	return stream
 }
 
+// GetMetrics retrieves queue-related metrics, including queue size and message claim delays.
 func (r *RedisStreamMessageQueue) GetMetrics(ctx context.Context) (map[string]interface{}, error) {
 	var metrics = make(map[string]interface{})
 
@@ -117,9 +126,14 @@ func (r *RedisStreamMessageQueue) Add(ctx context.Context, message *contracts.Me
 	return nil
 }
 
-// Receive Fetch data for the stream
-// duration: The maximum time to block
-func (r *RedisStreamMessageQueue) Receive(ctx context.Context, duration time.Duration, batchSize int, group, consumerName string) ([]contracts.Message, error) {
+func (r *RedisStreamMessageQueue) RequireHeartHeartBeat() bool {
+	return true
+}
+
+// Receive retrieves messages from the Redis stream.
+// Messages require heartbeats to ensure they are not reclaimed by other consumers.
+// If no messages are available, it blocks for the specified duration.
+func (r *RedisStreamMessageQueue) fetchMessage(ctx context.Context, duration time.Duration, batchSize int, group, consumerName string) ([]contracts.Message, error) {
 	readResult, err := r.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    group,
 		Consumer: consumerName,
@@ -137,7 +151,7 @@ func (r *RedisStreamMessageQueue) Receive(ctx context.Context, duration time.Dur
 			if err := r.upsertConsumerGroup(group); err != nil {
 				return nil, err
 			}
-			return r.Receive(ctx, duration, batchSize, group, consumerName)
+			return r.fetchMessage(ctx, duration, batchSize, group, consumerName)
 		}
 
 		return nil, err
@@ -224,22 +238,100 @@ func (r *RedisStreamMessageQueue) upsertConsumerGroup(group string) error {
 	return nil
 }
 
+func (r *RedisStreamMessageQueue) HeartBeat(ctx context.Context, group, consumerName, messageID string) error {
+	_, err := r.client.XClaimJustID(ctx, &redis.XClaimArgs{
+		Stream:   r.stream,
+		Group:    group,
+		Consumer: consumerName,
+		MinIdle:  0,
+		Messages: []string{messageID},
+	}).Result()
+	return err
+}
+
 func (r *RedisStreamMessageQueue) getHeartBeatFunction(group, consumerName, messageID string) contracts.HeartBeatFunc {
 	return func(ctx context.Context) error {
 		// XCLAIM will increment the count of attempted deliveries of the message unless the JUSTID option has been specified
 		// TODO how to write test for this??
-		return r.client.XClaimJustID(ctx, &redis.XClaimArgs{
-			Stream:   r.stream,
-			Group:    group,
-			Consumer: consumerName,
-			MinIdle:  0,
-			Messages: []string{messageID},
-		}).Err()
+		return r.HeartBeat(ctx, group, consumerName, messageID)
 	}
 }
 
+// Fetch retrieves messages from the Redis stream.
+// It first checks for pending messages and reclaims them if they are idle beyond the reClaimDelay.
+// If no pending messages are available, it fetches new messages from the stream.
+// This method ensures efficient processing of messages by prioritizing pending ones before consuming new messages.
+// Messages fetched using this function may require acknowledgment or deletion based on the queue's configuration.
+func (r *RedisStreamMessageQueue) Receive(ctx context.Context,
+	blockDuration time.Duration, batchSize int, group, consumerName string) ([]contracts.Message, error) {
+	shouldProcessPendingMessage := false
+	var messages []contracts.Message = make([]contracts.Message, 0)
+	var err error
+
+	if r.checkPendingLock.TryLock() {
+		shouldProcessPendingMessage = time.Since(r.lastPendingCheckTime) >= r.reClaimDelay
+		defer r.checkPendingLock.Unlock()
+	}
+
+	if shouldProcessPendingMessage {
+		// Fetch Pending Messages
+		r.lastPendingCheckTime = time.Now()
+
+		pendings, err := r.getPendingMessages(ctx, blockDuration, batchSize, group)
+		if err != nil {
+			if errors.Is(err, contracts.ErrNoNewMessage) {
+				goto ReceiveMessage
+			}
+
+			return nil, err
+		}
+		if len(pendings) > 0 {
+			pendingIds := []string{}
+			pendingsMap := make(map[string]PendingMesssage)
+			for _, pendingInfo := range pendings {
+				pendingIds = append(pendingIds, pendingInfo.ID)
+				pendingsMap[pendingInfo.ID] = pendingInfo
+			}
+			rawMessages, err := r.client.XClaim(ctx, &redis.XClaimArgs{
+				Stream:   r.stream,
+				Group:    group,
+				Consumer: consumerName,
+				MinIdle:  r.reClaimDelay,
+				Messages: pendingIds,
+			}).Result()
+			if err != nil {
+				return nil, err
+			}
+
+			// Convert them to messages
+			for _, msg := range rawMessages {
+				values := msg.Values
+				id := msg.ID
+
+				// Retry Count on stream list is always 1
+				messages = append(messages, contracts.NewMessage(id, values[payloadKey].(string), pendingsMap[id].RetryCount))
+			}
+		}
+
+		return messages, nil
+	}
+
+ReceiveMessage:
+	messages, err = r.fetchMessage(ctx, blockDuration, batchSize, group, consumerName)
+	if err != nil {
+		if errors.Is(err, contracts.ErrNoNewMessage) {
+			return messages, nil
+		}
+		return nil, err
+	}
+
+	return messages, nil
+}
+
+// Consume starts consuming messages from the Redis stream using the provided consumer function.
+// This method manages incoming and pending messages, ensuring their processing or reclamation.
 func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
-	readBatchSize int, blockDuration time.Duration,
+	batchSize int, blockDuration time.Duration,
 	group, consumerName string,
 	errorChannel chan error,
 	consumer contracts.StreamConsumeFunc) {
@@ -248,21 +340,7 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		r.processIncomingMessages(ctx, readBatchSize, blockDuration, group, consumerName, errorChannel, consumer)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(r.reClaimDelay)
-		for {
-			select {
-			case <-ticker.C:
-				go r.processPendingMessages(ctx, readBatchSize, blockDuration, group, consumerName, errorChannel, consumer)
-			case <-ctx.Done():
-				return
-			}
-		}
+		r.processIncomingMessages(ctx, batchSize, blockDuration, group, consumerName, errorChannel, consumer)
 	}()
 
 	wg.Add(1)
@@ -287,87 +365,18 @@ func (r *RedisStreamMessageQueue) Consume(ctx context.Context,
 	wg.Wait()
 }
 
+// Ack acknowledges the processing of a specific message by its ID.
 func (r *RedisStreamMessageQueue) Ack(ctx context.Context, group, messageId string) error {
 	_, err := r.client.XAck(ctx, r.stream, group, messageId).Result()
+
+	if r.deleteOnAck {
+		// To prevent stream from getting larger and larger we can delete task after it processed
+		if err := r.client.XDel(ctx, r.stream, messageId).Err(); err != nil {
+			log.Error(err)
+		}
+	}
+
 	return err
-}
-
-func (r *RedisStreamMessageQueue) processPendingMessages(ctx context.Context,
-	readBatchSize int, blockDuration time.Duration, group, consumerName string, errorChannel chan error, consumer contracts.StreamConsumeFunc) {
-	// Return immediately if ctx is canceled
-
-	if ctx.Err() != nil {
-		return
-	}
-
-	pendings, err := r.getPendingMessages(ctx, blockDuration, readBatchSize, group)
-	if err != nil {
-		if errors.Is(err, contracts.ErrNoNewMessage) {
-			return
-		}
-
-		errorChannel <- err
-		return
-	}
-
-	pendingIds := []string{}
-	pendingsMap := make(map[string]PendingMesssage)
-	for _, pendingInfo := range pendings {
-		pendingIds = append(pendingIds, pendingInfo.ID)
-		pendingsMap[pendingInfo.ID] = pendingInfo
-	}
-
-	messages, err := r.client.XClaim(ctx, &redis.XClaimArgs{
-		Stream:   r.stream,
-		Group:    group,
-		Consumer: consumerName,
-		MinIdle:  r.reClaimDelay,
-		Messages: pendingIds,
-	}).Result()
-
-	// Consume Messages
-	for _, msg := range messages {
-		// Should not execute if context is canceled
-		if ctx.Err() != nil {
-			return
-		}
-
-		if err != nil {
-			errorChannel <- err
-			continue
-		}
-
-		messages, err := r.client.XRange(ctx, r.stream, msg.ID, msg.ID).Result()
-		if err != nil {
-			errorChannel <- err
-			continue
-		}
-
-		if len(messages) == 0 {
-			continue
-		}
-
-		message := contracts.NewMessage(msg.ID, messages[0].Values[payloadKey].(string), pendingsMap[msg.ID].RetryCount)
-
-		// heartbeat is required for run running tasks, to prevent the task from being acquired by another worker
-		consumeErr := consumer(ctx, message, r.getHeartBeatFunction(group, consumerName, message.GetId()))
-		if consumeErr != nil {
-			errorChannel <- consumeErr
-			continue
-		}
-
-		// Remove task from PEL (Pending Entries List)
-		if err := r.Ack(ctx, group, message.GetId()); err != nil {
-			errorChannel <- err
-		}
-
-		if r.deleteOnConsume {
-			// To prevent stream from getting larger and larger we can delete task after it proccessed
-			if err := r.client.XDel(ctx, r.stream, message.GetId()).Err(); err != nil {
-				errorChannel <- err
-			}
-		}
-	}
 }
 
 func (r *RedisStreamMessageQueue) processIncomingMessages(ctx context.Context,
@@ -416,13 +425,6 @@ func (r *RedisStreamMessageQueue) processIncomingMessages(ctx context.Context,
 				errorChannel <- err
 			}
 
-			if r.deleteOnConsume {
-				// To prevent stream from getting larger and larger we can delete task after it processed
-				if err := r.client.XDel(context.Background(), r.stream, message.GetId()).Err(); err != nil {
-					errorChannel <- err
-				}
-			}
-
 			// storing metrics should not interrupt message processing
 			duration := time.Now().UnixNano() - startNano
 			go func() {
@@ -434,14 +436,17 @@ func (r *RedisStreamMessageQueue) processIncomingMessages(ctx context.Context,
 	}
 }
 
+// Delete removes a specific message from the Redis stream by its ID.
 func (r *RedisStreamMessageQueue) Delete(ctx context.Context, id string) error {
 	return r.client.XDel(ctx, r.stream, id).Err()
 }
 
+// Purge deletes all messages from the Redis stream.
 func (r *RedisStreamMessageQueue) Purge(ctx context.Context) error {
 	return r.client.Del(ctx, r.stream).Err()
 }
 
+// Len returns the total number of messages in the Redis stream.
 func (r *RedisStreamMessageQueue) Len() (int64, error) {
 	return r.client.XLen(context.Background(), r.stream).Result()
 }

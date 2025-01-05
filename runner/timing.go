@@ -115,7 +115,7 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(t.cfg.NumWorkers)) * float64(replicationFactor))
 	tps := 0.0
 	if avgTiming != 0 {
-		tps = (float64(1000.0) / float64(avgTiming)) * float64(t.activeWorkers.Load()) * float64(replicationFactor)
+		tps = (float64(1000.0) / float64(avgTiming)) * float64(t.workerPool.Cap()) * float64(replicationFactor)
 	}
 	return Stats{
 		PerTaskTiming:     perTaskTiming,

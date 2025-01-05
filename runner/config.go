@@ -16,7 +16,8 @@ type TaskRunnerConfig struct {
 	ConsumerGroup   string
 	ConsumersPrefix string
 
-	NumWorkers int
+	NumWorkers  int
+	NumFetchers int
 
 	// ReplicationFactor Number of pod replicas configured, affecting metric calculations
 	// Let T_avg be the average execution time of task, Q_len be the length of the queue, and W_num be the number of workers
@@ -28,4 +29,6 @@ type TaskRunnerConfig struct {
 
 	LongQueueHook      LongQueueHook
 	LongQueueThreshold time.Duration
+
+	BlockDuration time.Duration
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 	"github.com/soroosh-tanzadeh/taskrunner/election"
@@ -55,11 +56,11 @@ type TaskRunner struct {
 
 	cfg TaskRunnerConfig
 
-	activeWorkers atomic.Int64
-
 	inFlight  atomic.Int64
 	processed atomic.Int64
 	fails     atomic.Int64
+
+	workerPool *ants.PoolWithFunc
 
 	queue contracts.MessageQueue
 
@@ -102,6 +103,11 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 	}
 	taskRunner.host = taskRunner.cfg.Host
 
+	// For Backward compatibility
+	if taskRunner.cfg.NumFetchers == 0 {
+		taskRunner.cfg.NumFetchers = cfg.BatchSize
+	}
+
 	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)
 
 	taskRunner.locker = locker.NewRedisMutexLocker(taskRunner.redisClient)
@@ -133,9 +139,15 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 	}
 
 	// Span n workers to start consuming messages
-	for workerID := 1; workerID <= t.cfg.NumWorkers; workerID++ {
+	pool, err := ants.NewPoolWithFunc(t.cfg.NumWorkers, t.worker, ants.WithPanicHandler(t.workerPanicHandler))
+	if err != nil {
+		return err
+	}
+	t.workerPool = pool
+
+	for fetcherID := 1; fetcherID <= t.cfg.NumFetchers; fetcherID++ {
 		t.wg.Add(1)
-		go t.addWorker(ctx, workerID)
+		go t.addFetcher(ctx, fetcherID)
 	}
 
 	// Register Replication
@@ -177,6 +189,9 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 	t.StartElection(ctx)
 
 	t.wg.Wait()
+
+	// Wait at most 30 seconds for workers to stop
+	t.workerPool.ReleaseTimeout(time.Second * 30)
 
 	t.status.Store(stateStopped)
 

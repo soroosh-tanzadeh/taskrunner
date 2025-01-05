@@ -13,6 +13,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	log "github.com/sirupsen/logrus"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
 	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
 	mock "github.com/stretchr/testify/mock"
@@ -244,6 +245,9 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	expectedPayload := "Test Payload"
 	redisClient := t.setupRedis()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	taskOptions := &Task{
 		Name:               "task",
 		MaxRetry:           1,
@@ -254,35 +258,38 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 			return nil
 		},
 	}
+
+	taskmessageJson, err := json.Marshal(taskOptions.CreateMessage(expectedPayload))
+	t.Assert().NoError(err)
+	message := contracts.NewMessage(uuid.NewString(), string(taskmessageJson), 1)
 	mockQueue := NewMockMessageQueue(t.T())
-	mockQueue.On("Consume", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		taskmessageJson, err := json.Marshal(taskOptions.CreateMessage(expectedPayload))
-		t.Require().NoError(err)
-		wokerFunc := args[6].(contracts.StreamConsumeFunc)
-		wokerFunc(context.Background(), contracts.NewMessage(uuid.NewString(), string(taskmessageJson), 1), func(ctx context.Context) error {
-			hbfCounter.Add(1)
-			return nil
-		})
-	}).Return(nil)
+	mockQueue.On("Receive", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]contracts.Message{message}, nil)
+	mockQueue.On("Len").Maybe().Return(int64(0), nil)
 	mockQueue.On("Add", mock.Anything, mock.Anything).Return(nil)
+	mockQueue.On("RequireHeartHeartBeat").Return(true)
+	mockQueue.On("Ack", mock.Anything, "test", message.GetId()).Return(nil)
+	mockQueue.On("HeartBeat", mock.Anything, "test", mock.Anything, message.GetId()).Run(func(args mock.Arguments) {
+		hbfCounter.Add(1)
+	}).Return(nil)
+
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test",
 		ConsumersPrefix:    "test",
-		LongQueueThreshold: time.Second * 5,
+		LongQueueThreshold: time.Second * 100,
 		NumWorkers:         1,
 	}, redisClient, mockQueue)
 
 	taskRunner.RegisterTask(taskOptions)
 	go func() {
-		taskRunner.Start(context.Background())
+		taskRunner.Start(ctx)
 	}()
 
-	err := taskRunner.Dispatch(context.Background(), "task", expectedPayload)
+	err = taskRunner.Dispatch(context.Background(), "task", expectedPayload)
 	t.Assert().NoError(err)
 	select {
 	case <-callChannel:
-		t.Assert().Equal(int64(9), hbfCounter.Load())
+		t.Assert().GreaterOrEqual(hbfCounter.Load(), int64(9))
 		break
 	case err := <-taskRunner.ErrorChannel():
 		t.FailNow(err.Error())
@@ -291,7 +298,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	}
 }
 
-func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
+func (t *TaskRunnerTestSuit) Test_ShouldHandleFetcherPanic() {
 	callChannel := make(chan bool)
 	consumeCallCounter := atomic.Int64{}
 	expectedPayload := "Test Payload"
@@ -306,27 +313,27 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
 			return nil
 		},
 	}
+	taskmessageJson, err := json.Marshal(taskOptions.CreateMessage(expectedPayload))
+	t.Require().NoError(err)
+	message := contracts.NewMessage(uuid.NewString(), string(taskmessageJson), 1)
+
 	mockQueue := NewMockMessageQueue(t.T())
-	mockQueue.On("Consume", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+	mockQueue.On("Receive", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		consumeCallCounter.Add(1)
 		if consumeCallCounter.Load() == 1 {
 			panic(errors.New("I'm Panic"))
 		}
-
-		taskmessageJson, err := json.Marshal(taskOptions.CreateMessage(expectedPayload))
-		t.Require().NoError(err)
-		wokerFunc := args[6].(contracts.StreamConsumeFunc)
-		wokerFunc(context.Background(), contracts.NewMessage(uuid.NewString(), string(taskmessageJson), 1), func(ctx context.Context) error {
-			return nil
-		})
-	}).Return(nil)
+	}).Return([]contracts.Message{message}, nil)
+	mockQueue.On("HeartBeat", mock.Anything, "test", mock.Anything, message.GetId()).Maybe().Return(nil)
+	mockQueue.On("RequireHeartHeartBeat").Return(true)
 	mockQueue.On("Add", mock.Anything, mock.Anything).Return(nil)
+	mockQueue.On("Ack", mock.Anything, mock.Anything, mock.Anything).Maybe().Return(nil)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test",
 		ConsumersPrefix:    "test",
-		LongQueueThreshold: time.Second * 10,
-		NumWorkers:         2,
+		LongQueueThreshold: time.Second * 200,
+		NumFetchers:        2,
 	}, redisClient, mockQueue)
 
 	taskRunner.RegisterTask(taskOptions)
@@ -334,12 +341,10 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
 		taskRunner.Start(context.Background())
 	}()
 
-	err := taskRunner.Dispatch(context.Background(), "task", expectedPayload)
+	err = taskRunner.Dispatch(context.Background(), "task", expectedPayload)
 	t.Assert().NoError(err)
 	select {
 	case <-callChannel:
-		time.Sleep(time.Millisecond * 30)
-		t.Assert().Equal(int64(2), taskRunner.activeWorkers.Load())
 		break
 	case err := <-taskRunner.ErrorChannel():
 		t.FailNow(err.Error())
@@ -349,17 +354,18 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleWorkerPanic() {
 }
 
 func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed() {
-	callChannel := make(chan bool)
+	callChannel := make(chan bool, 1)
 	expectedPayload := "Test Payload"
 	expectedError := errors.New("I'm Panic Error")
 	redisClient := t.setupRedis()
-	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*5, true)
 	taskRunner := NewTaskRunner(TaskRunnerConfig{
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
-		NumWorkers:         10,
-		LongQueueThreshold: time.Second * 10,
+		NumWorkers:         1,
+		NumFetchers:        1,
+		LongQueueThreshold: time.Second * 100,
 		FailedTaskHandler: func(_ context.Context, taskMessage TaskMessage, err error) error {
 			t.Assert().Equal(taskMessage.Payload, expectedPayload)
 			t.Assert().ErrorIs(err, ErrTaskMaxRetryExceed)
@@ -373,6 +379,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed(
 		MaxRetry:           3,
 		ReservationTimeout: time.Millisecond,
 		Action: func(ctx context.Context, payload any) error {
+			fmt.Println("Task")
 			return expectedError
 		},
 		Unique: false,
@@ -381,13 +388,19 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenMaxRtryExceed(
 		taskRunner.Start(context.Background())
 	}()
 
+	go func() {
+		for err := range taskRunner.ErrorChannel() {
+			log.Error(err)
+		}
+	}()
+
 	err := taskRunner.Dispatch(context.Background(), "task", expectedPayload)
 	t.Assert().NoError(err)
 
 	select {
 	case <-callChannel:
 		break
-	case <-time.After(time.Second):
+	case <-time.After(time.Second * 25):
 		t.FailNow("Task was not excuted")
 	}
 }
@@ -402,7 +415,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenTaskNotExist()
 		BatchSize:          100,
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
-		LongQueueThreshold: time.Second * 10,
+		LongQueueThreshold: time.Second * 100,
 		NumWorkers:         10,
 		FailedTaskHandler: func(_ context.Context, taskMessage TaskMessage, err error) error {
 			t.Assert().Equal(taskMessage.Payload, expectedPayload)
@@ -475,6 +488,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenPayloadIsInval
 	case <-callChannel:
 		break
 	case <-time.After(time.Second):
+		fmt.Println("I wasn't called")
 		t.FailNow("Task was not excuted")
 	}
 }

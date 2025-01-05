@@ -28,7 +28,7 @@ func setupClient() *redis.Client {
 func TestRedisStreamMessageQueue(t *testing.T) {
 	client := setupClient()
 
-	queue := NewRedisStreamMessageQueue(client, "test", "queue", 1, true)
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*5, true)
 
 	t.Run("Add_ShouldSetID", func(t *testing.T) {
 		msg := contracts.Message{
@@ -44,6 +44,7 @@ func TestRedisStreamMessageQueue(t *testing.T) {
 			Payload: "test payload",
 		}
 		err := queue.Add(context.Background(), &msg)
+		queue.lastPendingCheckTime = time.Now()
 		assert.NoError(t, err)
 
 		msgReceived, err := queue.Receive(context.Background(), 1000, 1, "test", "test1")
@@ -56,6 +57,7 @@ func TestRedisStreamMessageQueue(t *testing.T) {
 			Payload: "test payload",
 		}
 		err := queue.Add(context.Background(), &msg)
+		queue.lastPendingCheckTime = time.Now()
 		assert.NoError(t, err)
 
 		msgReceived, err := queue.Receive(context.Background(), 1000, 1, "test", "test1")
@@ -275,4 +277,114 @@ func Test_ShouldNotDeleteConsumers_WhenDeleteOnShutdownIsSettedToFalse(t *testin
 
 	result, _ := client.XInfoConsumers(context.Background(), "test:queue", "mygroup").Result()
 	assert.Equal(t, len(result), 1)
+}
+
+func TestRedisStreamMessageQueue_Fetch(t *testing.T) {
+	client := setupClient()
+	queue := NewRedisStreamMessageQueue(client, "test", "queue", time.Second*1, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("Fetch_ShouldRetrieveNewMessages", func(t *testing.T) {
+		client.FlushAll(ctx)
+		msg := contracts.Message{
+			Payload: "test payload",
+		}
+		err := queue.Add(ctx, &msg)
+		assert.NoError(t, err)
+
+		messages, err := queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 1)
+		assert.Equal(t, "test payload", messages[0].GetPayload())
+	})
+
+	t.Run("Fetch_ShouldHandlePendingMessages", func(t *testing.T) {
+		client.FlushAll(ctx)
+		msg := contracts.Message{
+			Payload: "pending payload",
+		}
+		err := queue.Add(ctx, &msg)
+		assert.NoError(t, err)
+
+		queue.lastPendingCheckTime = time.Now().Add(time.Second * -5)
+
+		// Simulate pending messages by receiving them without acknowledging
+		_, err = queue.Receive(ctx, time.Second, 1, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		<-time.After(time.Millisecond * 1200) // 1.2 seconds
+
+		messages, err := queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 1)
+		assert.Equal(t, "pending payload", messages[0].GetPayload())
+	})
+
+	t.Run("Fetch_ShouldReturnNoMessagesWhenQueueIsEmpty", func(t *testing.T) {
+		client.FlushAll(ctx)
+		messages, err := queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 0)
+	})
+
+	t.Run("Fetch_ShouldRetrieveAndAcknowledgePendingMessages", func(t *testing.T) {
+		client.FlushAll(ctx)
+		msg1 := contracts.Message{
+			Payload: "pending payload 1",
+		}
+		msg2 := contracts.Message{
+			Payload: "pending payload 2",
+		}
+		err := queue.Add(ctx, &msg1)
+		assert.NoError(t, err)
+		err = queue.Add(ctx, &msg2)
+		assert.NoError(t, err)
+
+		// Simulate pending messages by receiving them without acknowledging
+		_, err = queue.Receive(ctx, time.Second, 2, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+
+		<-time.After(time.Millisecond * 1200) // 1.2 seconds
+
+		// Fetch pending messages
+		messages, err := queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 2)
+		assert.Equal(t, "pending payload 1", messages[0].GetPayload())
+		assert.Equal(t, "pending payload 2", messages[1].GetPayload())
+
+		// Acknowledge the messages
+		for _, msg := range messages {
+			err := queue.Ack(ctx, "testgroup", msg.GetId())
+			assert.NoError(t, err)
+		}
+
+		// Verify no pending messages remain
+		messages, err = queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 0)
+	})
+
+	t.Run("Fetch_ShouldNotFetchWhileHeartBeatIsCalled", func(t *testing.T) {
+		client.FlushAll(ctx)
+		msg := contracts.Message{
+			Payload: "test payload",
+		}
+		err := queue.Add(ctx, &msg)
+		assert.NoError(t, err)
+
+		messages, err := queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 1)
+		assert.Equal(t, "test payload", messages[0].GetPayload())
+
+		<-time.After(time.Millisecond * 1200) // 1.2 seconds
+
+		assert.NoError(t, queue.HeartBeat(ctx, "testgroup", "testconsumer", msg.ID))
+
+		messages, err = queue.Receive(ctx, time.Second, 10, "testgroup", "testconsumer")
+		assert.NoError(t, err)
+		assert.Len(t, messages, 0)
+	})
 }
