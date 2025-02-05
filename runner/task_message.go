@@ -1,6 +1,7 @@
 package runner
 
 type TaskMessage struct {
+	ID                 string `json:"-"`
 	Unique             bool   `json:"unique"`
 	UniqueFor          int64  `json:"unique_for"`
 	UniqueKey          string `json:"unique_key"`
