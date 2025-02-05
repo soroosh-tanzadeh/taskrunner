@@ -72,16 +72,17 @@ func (t *TaskRunner) worker(i interface{}) {
 	}
 
 	taskMessage := TaskMessage{}
+	// Set task id to message id
+	taskMessage.ID = m.GetId()
+
 	if err := json.Unmarshal([]byte(messagePayload), &taskMessage); err != nil {
 		log.WithError(err).WithField("payload", m.Payload).Error("Can not parse message payload")
 		failed()
 		// When message payload is invalid retrying is meaningless
-		handleFailedTask(ctx, taskMessage, err)
+		taskMessage.Payload = m.Payload
+		handleFailedTask(ctx, taskMessage, ErrInvalidTaskPayload)
 		return
 	}
-
-	// Set task id to message id
-	taskMessage.ID = m.GetId()
 
 	task, ok := t.tasks.Get(taskMessage.TaskName)
 	if !ok {

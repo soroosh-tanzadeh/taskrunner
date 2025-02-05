@@ -45,14 +45,17 @@ func (t *TaskRunner) addFetcher(ctx context.Context, fetcherID int) {
 func (t *TaskRunner) fetchMessage(ctx context.Context, fetcherID int) {
 	batchSize := t.cfg.BatchSize
 	consumerName := t.consumerName() + "_" + strconv.Itoa(fetcherID)
-
+	blockDuration := t.cfg.BlockDuration
+	if blockDuration == 0 {
+		blockDuration = time.Second * 5
+	}
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
 		actionContext := context.Background()
-		messages, err := t.queue.Receive(actionContext, time.Second*5, batchSize, t.ConsumerGroup(), consumerName)
+		messages, err := t.queue.Receive(actionContext, blockDuration, batchSize, t.ConsumerGroup(), consumerName)
 		if err != nil {
 			t.captureError(err)
 			continue
