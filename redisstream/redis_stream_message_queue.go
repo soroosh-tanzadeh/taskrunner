@@ -39,6 +39,55 @@ type RedisStreamMessageQueue struct {
 	checkPendingLock     *sync.Mutex
 }
 
+// NewRedisStreamMessageQueueWithOptions creates a new RedisStreamMessageQueue with the provided Redis client and optional configuration.
+// The function initializes the queue with the following default values:
+//   - Stream: "default:queue" (prefix: "default", queue: "queue")
+//   - DeleteOnAck: true (messages are automatically deleted after acknowledgment)
+//   - ReClaimDelay: 5 minutes (delay before reclaiming unacknowledged messages)
+//   - Metrics: A RedisRing is created with a default prefix of "default:metrics:queue"
+//
+// Use the provided Option functions (e.g., WithPrefix, WithQueue, WithReClaimDelay, WithDeleteOnAck, WithFetchMethod)
+// to override these defaults and customize the behavior of the queue.
+//
+// Example:
+//
+//	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+//	queue := NewRedisStreamMessageQueueWithOptions(
+//	    redisClient,
+//	    WithPrefix("myapp"),
+//	    WithQueue("myqueue"),
+//	    WithReClaimDelay(10*time.Minute),
+//	    WithDeleteOnAck(false)
+//	)
+func NewRedisStreamMessageQueueWithOptions(redisClient *redis.Client, options ...Option) *RedisStreamMessageQueue {
+	stream := &RedisStreamMessageQueue{
+		client:                   redisClient,
+		stream:                   "default:queue", // Default prefix and queue
+		deleteOnAck:              true,            // Default value
+		reClaimDelay:             5 * time.Minute, // Default value
+		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, "default:metrics:queue"),
+		checkPendingLock:         &sync.Mutex{},
+	}
+
+	// Apply options to override defaults
+	for _, option := range options {
+		option(stream)
+	}
+
+	// Fetch Redis version
+	if stream.redisVersion == nil {
+		redisInfo, _ := redisClient.InfoMap(context.Background()).Result()
+		if server, ok := redisInfo["Server"]; ok {
+			if redis_version, ok := server["redis_version"]; ok {
+				version, _ := semver.NewVersion(redis_version)
+				stream.redisVersion = version
+			}
+		}
+	}
+
+	return stream
+}
+
 func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string, reClaimDelay time.Duration, deleteOnAck bool) *RedisStreamMessageQueue {
 	stream := &RedisStreamMessageQueue{
 		client:                   redisClient,

@@ -63,12 +63,27 @@ func (t *TaskRunner) worker(i interface{}) {
 
 	messagePayload := m.Payload
 
+	handleFailedTask := func(ctx context.Context, taskMessage TaskMessage, err error) {
+		if err := t.cfg.FailedTaskHandler(ctx, taskMessage, err); err != nil {
+			log.WithError(err).Error()
+		} else {
+			err := t.queue.Ack(ctx, t.ConsumerGroup(), m.GetId())
+			if err != nil {
+				log.WithError(err).Error()
+			}
+		}
+	}
+
 	taskMessage := TaskMessage{}
+	// Set task id to message id
+	taskMessage.ID = m.GetId()
+
 	if err := json.Unmarshal([]byte(messagePayload), &taskMessage); err != nil {
 		log.WithError(err).WithField("payload", m.Payload).Error("Can not parse message payload")
 		failed()
 		// When message payload is invalid retrying is meaningless
-		t.cfg.FailedTaskHandler(ctx, TaskMessage{Payload: m.Payload}, ErrInvalidTaskPayload)
+		taskMessage.Payload = m.Payload
+		handleFailedTask(ctx, taskMessage, ErrInvalidTaskPayload)
 		return
 	}
 
@@ -78,7 +93,7 @@ func (t *TaskRunner) worker(i interface{}) {
 		failed()
 		// Handle failed task (Store in database, Reschedule or etc.)
 		// If failed task handler fails, it will be retried in next cycle
-		t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskNotFound)
+		handleFailedTask(ctx, taskMessage, ErrTaskNotFound)
 		return
 	}
 
@@ -92,7 +107,7 @@ func (t *TaskRunner) worker(i interface{}) {
 		failed()
 		// Handle failed task (Store in database, Reschedule or etc.)
 		// If failed task handler fails, it will be retried in next cycle
-		t.cfg.FailedTaskHandler(ctx, taskMessage, ErrTaskMaxRetryExceed)
+		handleFailedTask(ctx, taskMessage, ErrTaskMaxRetryExceed)
 		return
 	}
 

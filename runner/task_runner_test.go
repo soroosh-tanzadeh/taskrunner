@@ -267,7 +267,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	mockQueue.On("Len").Maybe().Return(int64(0), nil)
 	mockQueue.On("Add", mock.Anything, mock.Anything).Return(nil)
 	mockQueue.On("RequireHeartHeartBeat").Return(true)
-	mockQueue.On("Ack", mock.Anything, "test", message.GetId()).Return(nil)
+	mockQueue.On("Ack", mock.Anything, "test", message.GetId()).Maybe().Return(nil)
 	mockQueue.On("HeartBeat", mock.Anything, "test", mock.Anything, message.GetId()).Run(func(args mock.Arguments) {
 		hbfCounter.Add(1)
 	}).Return(nil)
@@ -460,10 +460,11 @@ func (t *TaskRunnerTestSuit) Test_ShouldCallFailedTaskHandler_WhenPayloadIsInval
 		ConsumerGroup:      "test_group",
 		ConsumersPrefix:    "taskrunner",
 		NumWorkers:         10,
+		BlockDuration:      time.Second,
 		LongQueueThreshold: time.Second * 10,
 		FailedTaskHandler: func(_ context.Context, taskMessage TaskMessage, err error) error {
-			t.Assert().Equal(taskMessage.Payload, expectedPayload)
-			t.Assert().ErrorIs(err, ErrInvalidTaskPayload)
+			t.Assert().Equal(expectedPayload, taskMessage.Payload)
+			t.Assert().ErrorIs(ErrInvalidTaskPayload, err)
 			callChannel <- true
 			return nil
 		},
@@ -823,4 +824,92 @@ func (t *TaskRunnerTestSuit) Test_ShouldHandleReplication() {
 	t.Assert().Equal(replication1, replication1)
 	t.Assert().Equal(2, replication1)
 	t.Assert().Equal(2, replication2)
+}
+
+func (t *TaskRunnerTestSuit) Test_woker_ShouldAcknowledge_WhenRetryLimitReaches() {
+	redisClient := t.setupRedis()
+
+	taskOptions := &Task{
+		Name:               "task",
+		MaxRetry:           1,
+		ReservationTimeout: time.Millisecond * 10,
+		Action: func(ctx context.Context, payload any) error {
+			return errors.New("FAILED")
+		},
+	}
+
+	taskmessageJson, err := json.Marshal(taskOptions.CreateMessage("test"))
+	t.Assert().NoError(err)
+	message := contracts.NewMessage(uuid.NewString(), string(taskmessageJson), 1)
+
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second, true)
+	queue.Add(context.Background(), &message)
+
+	failedCallCounter := &atomic.Int32{}
+	taskRunner := NewTaskRunner(TaskRunnerConfig{
+		Host:               "replication1",
+		BatchSize:          1,
+		ConsumerGroup:      "test_group",
+		BlockDuration:      time.Millisecond,
+		ConsumersPrefix:    "taskrunner",
+		NumWorkers:         4,
+		LongQueueThreshold: time.Millisecond * 100,
+		ReplicationFactor:  1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			t.Assert().Equal(ErrTaskMaxRetryExceed, err)
+			failedCallCounter.Add(1)
+			return nil
+		},
+	}, redisClient, queue)
+	taskRunner.RegisterTask(taskOptions)
+	go taskRunner.Start(context.Background())
+
+	<-time.After(time.Second * 5)
+
+	t.Assert().Equal(int32(1), failedCallCounter.Load())
+	l, err := queue.Len()
+	t.Require().Nil(err)
+	t.Assert().Equal(int64(0), l)
+}
+
+func (t *TaskRunnerTestSuit) Test_woker_ShouldAcknowledge_WhenTaskDoesNotExists() {
+	redisClient := t.setupRedis()
+
+	taskOptions := &Task{
+		Name:               "task",
+		MaxRetry:           1,
+		ReservationTimeout: time.Millisecond * 10,
+		Action: func(ctx context.Context, payload any) error {
+			return errors.New("FAILED")
+		},
+	}
+	taskmessageJson, err := json.Marshal(taskOptions.CreateMessage("test"))
+	t.Assert().NoError(err)
+	message := contracts.NewMessage(uuid.NewString(), string(taskmessageJson), 1)
+
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Millisecond*100, true)
+	queue.Add(context.Background(), &message)
+	failedCallCounter := &atomic.Int32{}
+	taskRunner := NewTaskRunner(TaskRunnerConfig{
+		Host:               "replication1",
+		BatchSize:          1,
+		ConsumerGroup:      "test_group",
+		ConsumersPrefix:    "taskrunner",
+		NumWorkers:         4,
+		LongQueueThreshold: time.Millisecond * 100,
+		ReplicationFactor:  1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			t.Assert().Equal(err, ErrTaskNotFound)
+			failedCallCounter.Add(1)
+			return nil
+		},
+	}, redisClient, queue)
+	go taskRunner.Start(context.Background())
+
+	<-time.After(time.Second * 5)
+
+	t.Assert().Equal(int32(1), failedCallCounter.Load())
+	l, err := queue.Len()
+	t.Require().Nil(err)
+	t.Assert().Equal(int64(0), l)
 }

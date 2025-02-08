@@ -18,7 +18,6 @@ func setupClient() *redis.Client {
 	if err != nil {
 		panic(err)
 	}
-
 	client := redis.NewClient(&redis.Options{
 		Addr: redisServer.Addr(),
 	})
