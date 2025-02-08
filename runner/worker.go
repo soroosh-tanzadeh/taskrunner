@@ -67,7 +67,10 @@ func (t *TaskRunner) worker(i interface{}) {
 		if err := t.cfg.FailedTaskHandler(ctx, taskMessage, err); err != nil {
 			log.WithError(err).Error()
 		} else {
-			t.queue.Ack(ctx, t.ConsumerGroup(), m.GetId())
+			err := t.queue.Ack(ctx, t.ConsumerGroup(), m.GetId())
+			if err != nil {
+				log.WithError(err).Error()
+			}
 		}
 	}
 
