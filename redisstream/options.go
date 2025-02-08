@@ -37,9 +37,3 @@ func WithDeleteOnAck(deleteOnAck bool) Option {
 		r.deleteOnAck = deleteOnAck
 	}
 }
-
-func WithFetchMethod(fetchMethod FetchMethod) Option {
-	return func(r *RedisStreamMessageQueue) {
-		r.fetchMethod = fetchMethod
-	}
-}

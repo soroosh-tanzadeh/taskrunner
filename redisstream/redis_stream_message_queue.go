@@ -18,13 +18,6 @@ import (
 const payloadKey = "payload"
 const metricsSampleSize = 1000
 
-type FetchMethod string
-
-const (
-	FetchNewest = FetchMethod("NEWEST")
-	FetchOldest = FetchMethod("OLDEST")
-)
-
 // RedisStreamMessageQueue represents a message queue implemented using Redis streams.
 // Messages require heartbeats to prevent reclaiming by other consumers in Redis Streams. (Do not forget to call HeartBeat function, while using Fetch)
 // It supports features like pending message processing, metrics collection, and automatic
@@ -44,8 +37,6 @@ type RedisStreamMessageQueue struct {
 
 	lastPendingCheckTime time.Time
 	checkPendingLock     *sync.Mutex
-
-	fetchMethod FetchMethod
 }
 
 // NewRedisStreamMessageQueueWithOptions creates a new RedisStreamMessageQueue with the provided Redis client and optional configuration.
@@ -53,7 +44,6 @@ type RedisStreamMessageQueue struct {
 //   - Stream: "default:queue" (prefix: "default", queue: "queue")
 //   - DeleteOnAck: true (messages are automatically deleted after acknowledgment)
 //   - ReClaimDelay: 5 minutes (delay before reclaiming unacknowledged messages)
-//   - FetchMethod: FetchOldest (messages are fetched in the order they were added)
 //   - Metrics: A RedisRing is created with a default prefix of "default:metrics:queue"
 //
 // Use the provided Option functions (e.g., WithPrefix, WithQueue, WithReClaimDelay, WithDeleteOnAck, WithFetchMethod)
@@ -67,8 +57,7 @@ type RedisStreamMessageQueue struct {
 //	    WithPrefix("myapp"),
 //	    WithQueue("myqueue"),
 //	    WithReClaimDelay(10*time.Minute),
-//	    WithDeleteOnAck(false),
-//	    WithFetchMethod(FetchNewest),
+//	    WithDeleteOnAck(false)
 //	)
 func NewRedisStreamMessageQueueWithOptions(redisClient *redis.Client, options ...Option) *RedisStreamMessageQueue {
 	stream := &RedisStreamMessageQueue{
@@ -78,7 +67,6 @@ func NewRedisStreamMessageQueueWithOptions(redisClient *redis.Client, options ..
 		reClaimDelay:             5 * time.Minute, // Default value
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, "default:metrics:queue"),
 		checkPendingLock:         &sync.Mutex{},
-		fetchMethod:              FetchOldest, // Default value
 	}
 
 	// Apply options to override defaults
@@ -108,7 +96,6 @@ func NewRedisStreamMessageQueue(redisClient *redis.Client, prefix, queue string,
 		reClaimDelay:             reClaimDelay,
 		messageProcessingMetrics: ring.NewRedisRing(redisClient, metricsSampleSize, prefix+":metrics:"+queue),
 		checkPendingLock:         &sync.Mutex{},
-		fetchMethod:              FetchOldest,
 	}
 
 	redisInfo, _ := redisClient.InfoMap(context.Background()).Result()
@@ -196,16 +183,11 @@ func (r *RedisStreamMessageQueue) RequireHeartHeartBeat() bool {
 // Messages require heartbeats to ensure they are not reclaimed by other consumers.
 // If no messages are available, it blocks for the specified duration.
 func (r *RedisStreamMessageQueue) fetchMessage(ctx context.Context, duration time.Duration, batchSize int, group, consumerName string) ([]contracts.Message, error) {
-	id := ">"
-	if r.fetchMethod == FetchNewest {
-		id = "^"
-	}
-
 	readResult, err := r.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    group,
 		Consumer: consumerName,
 		Count:    int64(batchSize),
-		Streams:  []string{r.stream, id},
+		Streams:  []string{r.stream, ">"},
 		Block:    duration,
 	}).Result()
 	if err != nil {

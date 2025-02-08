@@ -267,7 +267,7 @@ func (t *TaskRunnerTestSuit) Test_ShouldSendHeartbeatForLongRunnintTasks() {
 	mockQueue.On("Len").Maybe().Return(int64(0), nil)
 	mockQueue.On("Add", mock.Anything, mock.Anything).Return(nil)
 	mockQueue.On("RequireHeartHeartBeat").Return(true)
-	mockQueue.On("Ack", mock.Anything, "test", message.GetId()).Return(nil)
+	mockQueue.On("Ack", mock.Anything, "test", message.GetId()).Maybe().Return(nil)
 	mockQueue.On("HeartBeat", mock.Anything, "test", mock.Anything, message.GetId()).Run(func(args mock.Arguments) {
 		hbfCounter.Add(1)
 	}).Return(nil)
