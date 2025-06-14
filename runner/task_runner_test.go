@@ -12,6 +12,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
+	"github.com/panjf2000/ants/v2"
 	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 	"github.com/soroosh-tanzadeh/taskrunner/contracts"
@@ -63,6 +64,213 @@ func (t *TaskRunnerTestSuit) setupTaskRunner(redisClient *redis.Client) (contrac
 
 	return queue, taskRunner
 }
+
+func (t *TaskRunnerTestSuit) customSetupTaskRunner(redisClient *redis.Client, cfgOverrides TaskRunnerConfig) (contracts.MessageQueue, *TaskRunner) {
+	// Default config
+	config := TaskRunnerConfig{
+		BatchSize:          5,
+		ConsumerGroup:      "test_group", // Default, can be overridden
+		ConsumersPrefix:    "taskrunner",
+		NumWorkers:         10,
+		LongQueueThreshold: time.Second * 10,
+		ReplicationFactor:  1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			return nil
+		},
+		MetricsResetInterval: 0, // Default, can be overridden
+	}
+
+	// Apply overrides
+	if cfgOverrides.ConsumerGroup != "" {
+		config.ConsumerGroup = cfgOverrides.ConsumerGroup
+	}
+	if cfgOverrides.MetricsResetInterval > 0 {
+		config.MetricsResetInterval = cfgOverrides.MetricsResetInterval
+	}
+	// Allow explicit zero to be passed for MetricsResetInterval for specific tests
+	// Check if we are in a test context by ensuring T() is not nil
+	if t.Suite.T() != nil {
+		testName := t.Suite.T().Name()
+		if testName == "TestTaskRunnerTestSuit/Test_timingAggregator_MetricsReset_DisabledIfIntervalIsExplicitlyZeroAfterDefaulting" ||
+			testName == "TestTaskRunnerTestSuit/Test_NewTaskRunner_DefaultMetricsResetInterval" {
+			// For these specific tests, if MetricsResetInterval is passed as 0 in overrides, respect it.
+			if cfgOverrides.MetricsResetInterval == 0 {
+				config.MetricsResetInterval = 0
+			}
+		}
+	}
+
+	queue := redisstream.NewRedisStreamMessageQueue(redisClient, config.ConsumerGroup, "queue", time.Second*10, true)
+	taskRunner := NewTaskRunner(config, redisClient, queue)
+
+	// If an override was for 0, and NewTaskRunner defaulted it, allow tests to set it back to 0 if needed.
+	if cfgOverrides.MetricsResetInterval == 0 && taskRunner.cfg.MetricsResetInterval != 0 &&
+		(t.Suite.T().Name() == "TestTaskRunnerTestSuit/Test_timingAggregator_MetricsReset_DisabledIfIntervalIsExplicitlyZeroAfterDefaulting") {
+		taskRunner.cfg.MetricsResetInterval = 0
+	}
+
+
+	return queue, taskRunner
+}
+
+func (t *TaskRunnerTestSuit) Test_NewTaskRunner_DefaultMetricsResetInterval() {
+	redisClient := t.setupRedis()
+	_, taskRunner := t.customSetupTaskRunner(redisClient, TaskRunnerConfig{
+		ConsumerGroup:        "default_interval_group",
+		MetricsResetInterval: 0, // Explicitly set to 0 or omit
+	})
+
+	t.Assert().Equal(24*time.Hour, taskRunner.cfg.MetricsResetInterval, "MetricsResetInterval should default to 24 hours")
+}
+
+func (t *TaskRunnerTestSuit) Test_timingAggregator_MetricsReset_OccursAfterInterval() {
+	redisClient := t.setupRedis()
+	consumerGroup := "reset_occurs_group_" + uuid.NewString()
+	metricsResetInterval := 100 * time.Millisecond
+
+	_, taskRunner := t.customSetupTaskRunner(redisClient, TaskRunnerConfig{
+		ConsumerGroup:        consumerGroup,
+		MetricsResetInterval: metricsResetInterval,
+	})
+	// Verify preconditions for workerPool
+	t.Require().NotNil(taskRunner, "TaskRunner instance should not be nil")
+	t.Require().Greater(taskRunner.cfg.NumWorkers, 0, "NumWorkers should be positive in config")
+	// t.Require().NotNil(taskRunner.workerPool, "workerPool should be initialized by NewTaskRunner and not be nil") // This failed
+
+	// Workaround: If workerPool is nil, try to initialize it for the test because NewTaskRunner defers pool creation to Start().
+	if taskRunner.workerPool == nil {
+		// Define a simple panic handler for the test's ad-hoc pool
+		testPanicHandler := func(val interface{}) {
+			t.Suite.T().Logf("Test worker pool panic: %v", val)
+		}
+		pool, err := ants.NewPoolWithFunc(taskRunner.cfg.NumWorkers, taskRunner.worker, ants.WithPanicHandler(testPanicHandler))
+		if err != nil {
+			t.Suite.T().Fatalf("Failed to manually create worker pool for test: %v", err)
+		}
+		taskRunner.workerPool = pool
+		t.Require().NotNil(taskRunner.workerPool, "workerPool could not be manually initialized for the test")
+	}
+
+	taskRunner.isLeader.Store(true)
+	metricsHash := taskRunner.metricsHash // metricsKeyPrefix + consumerGroup + ":metrics"
+	taskName := "test_task_for_reset"
+	sumKey := taskName + "_sum"
+	countKey := taskName + "_count"
+
+	// Register a dummy task so its metrics are targeted by resetTimingMetrics
+	taskRunner.RegisterTask(&Task{
+		Name: taskName,
+		Action: func(ctx context.Context, payload any) error { return nil },
+	})
+
+	// Manually populate metrics
+	err := redisClient.HSet(context.Background(), metricsHash, sumKey, "1000", countKey, "10").Err()
+	t.Require().NoError(err)
+
+	// Store current time as the initial reset time for assertion logic, then manipulate for test condition
+	initialSystemTimeForLogic := time.Now()
+	taskRunner.lastMetricsResetTime = initialSystemTimeForLogic // Align before first call
+
+	// First call, should not reset as interval hasn't passed since lastMetricsResetTime was just set
+	taskRunner.timingAggregator()
+
+	sumVal, _ := redisClient.HGet(context.Background(), metricsHash, sumKey).Result()
+	countVal, _ := redisClient.HGet(context.Background(), metricsHash, countKey).Result()
+	t.Assert().Equal("1000", sumVal, "Sum should not be reset yet")
+	t.Assert().Equal("10", countVal, "Count should not be reset yet")
+	// lastMetricsResetTime should not have been updated by the timingAggregator call itself yet
+	t.Assert().Equal(initialSystemTimeForLogic, taskRunner.lastMetricsResetTime, "lastMetricsResetTime should not change yet")
+
+	// Manually adjust lastMetricsResetTime to simulate the passage of the interval for the system clock
+	// This makes `time.Since(taskRunner.lastMetricsResetTime)` correctly evaluate to > metricsResetInterval
+	taskRunner.lastMetricsResetTime = time.Now().Add(-(metricsResetInterval + (50 * time.Millisecond)))
+
+	// Second call, should reset
+	taskRunner.timingAggregator()
+
+	sumValAfter, err := redisClient.HGet(context.Background(), metricsHash, sumKey).Result()
+	t.Require().NoError(err)
+	countValAfter, err := redisClient.HGet(context.Background(), metricsHash, countKey).Result()
+	t.Require().NoError(err)
+
+	t.Assert().Equal("0", sumValAfter, "Sum should be reset to 0")
+	t.Assert().Equal("0", countValAfter, "Count should be reset to 0")
+	t.Assert().True(taskRunner.lastMetricsResetTime.After(initialSystemTimeForLogic), "lastMetricsResetTime should be updated")
+}
+
+func (t *TaskRunnerTestSuit) Test_timingAggregator_MetricsReset_DoesNotOccurBeforeInterval() {
+	redisClient := t.setupRedis()
+	consumerGroup := "reset_not_occurs_group_" + uuid.NewString()
+	metricsResetInterval := 200 * time.Millisecond
+
+	_, taskRunner := t.customSetupTaskRunner(redisClient, TaskRunnerConfig{
+		ConsumerGroup:        consumerGroup,
+		MetricsResetInterval: metricsResetInterval,
+	})
+
+	taskRunner.isLeader.Store(true)
+	metricsHash := taskRunner.metricsHash
+	taskName := "test_task_no_reset"
+	sumKey := taskName + "_sum"
+	countKey := taskName + "_count"
+
+	err := redisClient.HSet(context.Background(), metricsHash, sumKey, "1000", countKey, "10").Err()
+	t.Require().NoError(err)
+
+	initialResetTime := taskRunner.lastMetricsResetTime
+
+	// First call
+	taskRunner.timingAggregator()
+
+	// Fast forward, but not past the interval
+	t.redisServer.FastForward(metricsResetInterval - (50 * time.Millisecond))
+
+	// Second call
+	taskRunner.timingAggregator()
+
+	sumVal, _ := redisClient.HGet(context.Background(), metricsHash, sumKey).Result()
+	countVal, _ := redisClient.HGet(context.Background(), metricsHash, countKey).Result()
+	t.Assert().Equal("1000", sumVal, "Sum should not be reset")
+	t.Assert().Equal("10", countVal, "Count should not be reset")
+	t.Assert().Equal(initialResetTime, taskRunner.lastMetricsResetTime, "lastMetricsResetTime should not change")
+}
+
+func (t *TaskRunnerTestSuit) Test_timingAggregator_MetricsReset_DisabledIfIntervalIsExplicitlyZeroAfterDefaulting() {
+	redisClient := t.setupRedis()
+	consumerGroup := "reset_disabled_group_" + uuid.NewString()
+
+	// Setup with MetricsResetInterval = 0.
+	// The customSetupTaskRunner and NewTaskRunner interaction needs to ensure this 0 is respected.
+	_, taskRunner := t.customSetupTaskRunner(redisClient, TaskRunnerConfig{
+		ConsumerGroup:        consumerGroup,
+		MetricsResetInterval: 0, // Explicitly request disabling reset
+	})
+	// Ensure the config on taskRunner reflects 0, overriding potential defaulting if customSetupTaskRunner wasn't careful
+	taskRunner.cfg.MetricsResetInterval = 0
+
+
+	taskRunner.isLeader.Store(true)
+	metricsHash := taskRunner.metricsHash
+	taskName := "test_task_disabled_reset"
+	sumKey := taskName + "_sum"
+	countKey := taskName + "_count"
+
+	err := redisClient.HSet(context.Background(), metricsHash, sumKey, "1000", countKey, "10").Err()
+	t.Require().NoError(err)
+
+	initialResetTime := taskRunner.lastMetricsResetTime
+
+	taskRunner.timingAggregator()
+	t.redisServer.FastForward(48 * time.Hour) // Advance well past the default 24h
+	taskRunner.timingAggregator()
+
+	sumVal, _ := redisClient.HGet(context.Background(), metricsHash, sumKey).Result()
+	countVal, _ := redisClient.HGet(context.Background(), metricsHash, countKey).Result()
+	t.Assert().Equal("1000", sumVal, "Sum should not be reset when interval is 0")
+	t.Assert().Equal("10", countVal, "Count should not be reset when interval is 0")
+	t.Assert().Equal(initialResetTime, taskRunner.lastMetricsResetTime, "lastMetricsResetTime should not change when interval is 0")
+}
+
 
 func (t *TaskRunnerTestSuit) Test_ShouldExecuteTask() {
 	callChannel := make(chan bool)

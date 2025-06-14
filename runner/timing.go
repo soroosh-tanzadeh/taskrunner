@@ -39,8 +39,14 @@ func (t *TaskRunner) timingAggregator() {
 			t.cfg.LongQueueHook(stats)
 		}
 	}
-	// Reset metrics for all tasks
-	t.resetTimingMetrics()
+
+	// Check if MetricsResetInterval is configured and if the interval has passed
+	if t.cfg.MetricsResetInterval > 0 { // Ensure interval is positive
+		if time.Since(t.lastMetricsResetTime) > t.cfg.MetricsResetInterval {
+			t.resetTimingMetrics()
+			t.lastMetricsResetTime = time.Now()
+		}
+	}
 }
 
 // GetTimingStatistics return PerTaskTiming and other estimated statistics of the queue
