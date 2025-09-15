@@ -180,4 +180,4 @@ Contributions are welcome! Please:
 
 ## License
 
-Apache 2.0. See `LICENSE` for details.
+GPL-3.0. See `LICENSE` for details.
