@@ -1,17 +1,27 @@
-# TaskRunner 
-TaskRunner is a robust and efficient Go library designed to leverage the power of **Redis Streams** for distributed task execution.
+# TaskRunner
 
+TaskRunner is a high-performance Go library for distributed, reliable task processing built on Redis Streams. It provides horizontal scalability, leader election, delayed scheduling, unique jobs, and rich timing metrics with a simple API.
 
-## Key Features
-- **Asynchronous task Processing:** TaskRunner enables the scheduling and execution of tasks asynchronously, allowing your application to remain responsive and performant under heavy load.
-- **Scalable and Distributed:** Designed to scale horizontally, this library can expand its capacity by adding more workers without impacting the existing infrastructure. It supports seamless distribution of tasks across a cluster of servers, optimizing resource usage and balancing the load.
-- **Fault Tolerance:** Includes features for automatic task retries and error handling, ensuring that system failures do not lead to task loss or inconsistencies.
-- **Simple API:** Offers a straightforward and intuitive API that makes it easy to integrate and use within your existing Go applications.
-- **Real-time Monitoring and Logging:** Integrates monitoring capabilities to track task status and performance metrics in real-time, alongside comprehensive logging for debugging and audit trails.
-- **Task Scheduler:** The Task Scheduler allows the scheduling and execution of delayed tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. Tasks are scheduled, enqueued, and executed by workers in a distributed manner, ensuring scalability and reliability.
+## Highlights
 
-## Task Queue
-### Simple Example
+- **Distributed & Scalable**: Add instances to scale throughput horizontally.
+- **Reliable**: Visibility timeout with heartbeats prevents double-processing; pending reclaims; retries.
+- **Simple API**: Register tasks and dispatch payloads with minimal boilerplate.
+- **Delayed Scheduling**: Schedule jobs for future execution via Redis ZSET + Streams.
+- **Unique Jobs**: Enforce de-duplication across a time window via distributed locks.
+- **Leader Election**: Cooperative leadership for scheduling and maintenance loops.
+- **Observability**: Per-task timing metrics and queue statistics.
+
+## Installation
+
+```bash
+go get github.com/soroosh-tanzadeh/taskrunner
+```
+
+Requires Go 1.22+ and Redis 6+. For local development and tests, the project uses `miniredis` to simulate Redis in-memory.
+
+## Quickstart (Task Queue)
+
 ```go
 package main
 
@@ -22,170 +32,152 @@ import (
 	"sync"
 	"time"
 
-	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
-	"github.com/soroosh-tanzadeh/taskrunner/runner"
-	"github.com/redis/go-redis/v9"
-)
-
-func main() {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     "127.0.0.1:6379",
-		DB:       5,
-		PoolSize: 100,
-	})
-	wg := sync.WaitGroup{}
-
-	queue := redisstream.NewRedisStreamMessageQueue(rdb, "example_tasks", "default", time.Second*30, true)
-	taskRunner := runner.NewTaskRunner(runner.TaskRunnerConfig{
-		BatchSize:         10,
-		ConsumerGroup:     "example",
-		ConsumersPrefix:   "default",
-		NumWorkers:        10,
-		NumFetchers: 	   10,
-		ReplicationFactor: 1,
-		LongQueueHook: func(s runner.Stats) {
-			fmt.Printf("%v \n", s)
-		},
-		LongQueueThreshold: time.Second * 30,
-	}, rdb, queue)
-
-	taskRunner.RegisterTask(&runner.Task{
-		Name:     "exampletask",
-		MaxRetry: 10,
-		Action: func(ctx context.Context, payload any) error {
-			fmt.Printf("Hello from example task %s\n", payload)
-			return nil
-		},
-		Unique: false,
-	})
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		taskRunner.Start(context.Background())
-	}()
-
-	for i := 0; i < 100; i++ {
-		taskRunner.Dispatch(context.Background(), "exampletask", strconv.Itoa(i))
-	}
-
-	wg.Wait()
-
-}
-```
-
-### TaskRunnerConfig Parameters
-
-Below is a detailed description of each parameter in the `TaskRunnerConfig` struct.
-
-| Parameter            | Type                 | Description                                                                                                        |
-|----------------------|----------------------|--------------------------------------------------------------------------------------------------------------------|
-| `BatchSize`          | `int`                | The number of tasks to be processed in a single batch by the consumer.                                             |
-| `ConsumerGroup`      | `string`             | The name of the consumer group used in Redis Streams to differentiate between different sets of consumers.         |
-| `ConsumersPrefix`    | `string`             | A prefix used for naming consumers within the group, aiding in identification and management.                       |
-| `NumWorkers`         | `int`                | The number of consumer workers that will concurrently process tasks from the queue.                                 |
-| `NumFetchers`        | `int`                |  Defines the number of concurrent fetchers that retrieve tasks from the queue and distribute them to the worker pool. Each fetcher retrieves the number of messages specified in `BatchSize`. |
-| ~~`ReplicationFactor`~~  | `int`                | **Deprecated**. ReplicationFactor Number of pod replicas configured. Let T_avg be the average execution time of task, Q_len be the length of the queue, and W_num be the number of workers. The total execution time for the queue is estimated as **(T_avg * Q_len) / (W_num * ReplicationFactor)**.|
-| `FailedTaskHandler`  | `FailedTaskHandler`  | When a task can no longer be retried, this function will be called.                                                |
-| `LongQueueHook`      | `LongQueueHook`      | A hook function or callback that is triggered when the task queue length exceeds a specified threshold.             |
-| `LongQueueThreshold` | `time.Duration`      | The duration or length of the queue that triggers the `LongQueueHook` when exceeded.                                |
-
-**Recommendation**:
-For optimal performance with long-running tasks, it is recommended to use a larger `BatchSize` coupled with a large number of `NumWorkers` and a small `NumFetchers`. This configuration ensures that tasks are distributed more evenly across workers, reducing bottlenecks and improving overall efficiency.
-
-### Task Paramters
-
-Below is a table detailing the fields of the `Task` struct:
-
-| Field               | Type            | Description                                                                                                                                                      |
-|---------------------|-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Name`              | `string`        | The name of the task.                                                                                                                                            |
-| `MaxRetry`          | `int`           | The maximum number of times the task is retried if it fails initially.                                                                                           |
-| `ReservationTimeout`| `time.Duration` | The duration after which a worker must send a heartbeat if the task is still running. This prevents the task from being reassigned or reclaimed by another worker.|
-| `Action`            | `TaskAction`    | The action associated with the task.                                                                                                                             |
-| `Unique`            | `bool`          | If set to `true`, the task will not be dispatched if an identical task (by name and UniqueKey) is already in the queue and has not been completed.                             |
-| `UniqueKey`         | `UniqueKeyFunc` | Specifies a function to generate a unique key for the task. If `Unique` is `true`, tasks with the same unique key must not be in the queue simultaneously.       |
-| `UniqueFor`         | `int64`         | The time in seconds that must elapse since a similarly unique task was last enqueued before a new task with the same name and unique key can be dispatched.      |
-
-
-
-## Task Scheduler
-
-The Task Scheduler allows the scheduling and execution delayed tasks using Redis Sorted Sets (`ZSET`) and Redis Streams. 
-
-**Note**  The scheduler operates on a 5-second cycle. Tasks with a delay shorter than this cycle will still be processed in the next cycle. For example:
-- A task with a 2-second delay will execute after 5 seconds.
-- A task with a 6-second delay will execute after 10 seconds.
-### How it works?
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"sync"
-	"time"
-
 	"github.com/redis/go-redis/v9"
 	"github.com/soroosh-tanzadeh/taskrunner/redisstream"
 	"github.com/soroosh-tanzadeh/taskrunner/runner"
 )
 
 func main() {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     "127.0.0.1:6379",
-		DB:       5,
-		PoolSize: 100,
-		Password: "123456",
-	})
-	wg := sync.WaitGroup{}
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379", DB: 0, PoolSize: 50})
+	queue := redisstream.NewRedisStreamMessageQueueWithOptions(
+		rdb,
+		redisstream.WithPrefix("example"),
+		redisstream.WithQueue("tasks"),
+		redisstream.WithReClaimDelay(30*time.Second),
+		redisstream.WithDeleteOnAck(true),
+	)
 
-	queue := redisstream.NewRedisStreamMessageQueue(rdb, "example_tasks", "default", time.Second*30, true, false)
-	taskRunner := runner.NewTaskRunner(runner.TaskRunnerConfig{
-		BatchSize:         10,
-		ConsumerGroup:     "example",
-		ConsumersPrefix:   "default",
-		NumWorkers:        10,
-		NumFetchers: 	   10,
-		ReplicationFactor: 1,
-		LongQueueHook: func(s runner.Stats) {
-			fmt.Printf("%v \n", s)
-		},
-		LongQueueThreshold: time.Second * 30,
+	tr := runner.NewTaskRunner(runner.TaskRunnerConfig{
+		BatchSize:       10,
+		ConsumerGroup:   "example",
+		ConsumersPrefix: "default",
+		NumWorkers:      8,
+		NumFetchers:     4,
+		LongQueueHook: func(s runner.Stats) { fmt.Printf("%+v\n", s) },
+		LongQueueThreshold: 30 * time.Second,
 	}, rdb, queue)
 
-	taskRunner.RegisterTask(&runner.Task{
+	tr.RegisterTask(&runner.Task{
 		Name:     "exampletask",
-		MaxRetry: 10,
+		MaxRetry: 5,
 		Action: func(ctx context.Context, payload any) error {
-			fmt.Printf("Hello from example task: %s\n", payload)
+			fmt.Printf("Hello from example task %v\n", payload)
 			return nil
 		},
-		Unique: false,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-
+	defer cancel()
+	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		taskRunner.Start(ctx)
-	}()
+	go func() { defer wg.Done(); _ = tr.Start(ctx) }()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		taskRunner.StartDelayedSchedule(ctx, 1000)
-	}()
+	for i := 0; i < 100; i++ {
+		_ = tr.Dispatch(context.Background(), "exampletask", strconv.Itoa(i))
+	}
 
-	taskRunner.DispatchDelayed(context.Background(), "exampletask", "I'm delyed 1", time.Second*5)
-	taskRunner.DispatchDelayed(context.Background(), "exampletask", "I'm delyed 2", time.Second*10)
-
-	<-time.After(time.Second * 15)
-
+	time.Sleep(2 * time.Second)
 	cancel()
-
 	wg.Wait()
 }
 ```
+
+## Delayed Task Scheduler
+
+Run a cooperative scheduler that enqueues due jobs from a ZSET into the stream. The scheduler ticks every 5 seconds; delays shorter than this will be rounded up to the next tick.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+// Start workers
+go tr.Start(ctx)
+// Start scheduler with a batch size for due jobs
+go tr.StartDelayedSchedule(ctx, 1000)
+
+// Dispatch delayed jobs
+_ = tr.DispatchDelayed(context.Background(), "exampletask", "I run in ~5s", 5*time.Second)
+_ = tr.DispatchDelayed(context.Background(), "exampletask", "I run in ~10s", 10*time.Second)
+
+// ... later
+cancel()
+```
+
+Notes:
+
+- The scheduler respects leader election; only the leader instance enqueues due jobs.
+- Use `ScheduleFor(ctx, taskName, payload, time.Time)` to schedule for an absolute time.
+
+## Unique Jobs
+
+Prevent duplicate enqueues of the same job (optionally scoped by a custom key) for a specified window.
+
+```go
+tr.RegisterTask(&runner.Task{
+	Name:     "sendEmail",
+	MaxRetry: 3,
+	Unique:   true,
+	UniqueFor: 60, // seconds
+	UniqueKey: func(payload any) string { return payload.(string) }, // e.g., email ID
+	Action: func(ctx context.Context, payload any) error { return nil },
+})
+
+// First dispatch succeeds
+_ = tr.Dispatch(context.Background(), "sendEmail", "order-123")
+// Second dispatch within 60s will fail with runner.ErrTaskAlreadyDispatched
+err := tr.Dispatch(context.Background(), "sendEmail", "order-123")
+```
+
+## Configuration
+
+TaskRunner is configured via `runner.TaskRunnerConfig`:
+
+- **Host**: Optional, defaults to hostname; used in metrics and identity.
+- **BatchSize**: Number of messages fetched per read per fetcher.
+- **ConsumerGroup**: Redis Streams consumer group name.
+- **ConsumersPrefix**: Prefix for consumer names.
+- **NumWorkers**: Concurrent workers processing messages.
+- **NumFetchers**: Concurrent fetchers reading from the stream (each reads `BatchSize`).
+- **FailedTaskHandler**: Callback when a task exhausts retries.
+- **LongQueueHook**: Periodic timing/queue stats callback; frequency set by `LongQueueThreshold`.
+- **LongQueueThreshold**: Duration that influences the cadence of timing aggregation.
+- **BlockDuration**: Stream read block duration (defaults to 5s).
+- **MetricsResetInterval**: Interval to reset timing metrics (default 24h; set 0 to disable).
+- ~~ReplicationFactor~~: Deprecated; maintained for backward compatibility only.
+
+Redis Stream queue configuration via options on `NewRedisStreamMessageQueueWithOptions`:
+
+- `WithPrefix(prefix string)`
+- `WithQueue(queue string)`
+- `WithReClaimDelay(d time.Duration)` – reclaim pending messages after `d`.
+- `WithDeleteOnAck(enabled bool)`
+- `WithRedisVersion(version string)` – override auto-detected version if needed.
+
+## Examples
+
+See runnable examples and tests under `examples/`:
+
+- `examples/simple`: Basic queue usage
+- `examples/scheduler`: Delayed tasks scheduler
+- `examples/unique`: Unique jobs
+
+## Testing
+
+Run the full test suite:
+
+```bash
+go test ./...
+```
+
+The examples are covered by tests using `miniredis` so they run without a real Redis server.
+
+## Contributing
+
+Contributions are welcome! Please:
+
+- Open an issue to discuss substantial changes.
+- Write tests for new features and ensure `go test ./...` passes.
+- Feature branches name must be in this format: `feature/{feature-name}`
+- Follow idiomatic Go style and **keep APIs small and focused**.
+
+## License
+
+Apache 2.0. See `LICENSE` for details.
