@@ -18,7 +18,7 @@ TaskRunner is a high-performance Go library for distributed, reliable task proce
 go get github.com/soroosh-tanzadeh/taskrunner
 ```
 
-Requires Go 1.21+ and Redis 6+. For local development and tests, the project uses `miniredis` to simulate Redis in-memory.
+Requires Go 1.22+ and Redis 6+. For local development and tests, the project uses `miniredis` to simulate Redis in-memory.
 
 ## Quickstart (Task Queue)
 
