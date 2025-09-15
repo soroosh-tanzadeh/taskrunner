@@ -77,6 +77,8 @@ type TaskRunner struct {
 	locker contracts.DistributedLocker
 
 	host string
+
+	lastMetricsResetTime time.Time // Stores the timestamp of the last metrics reset
 }
 
 func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.MessageQueue) *TaskRunner {
@@ -87,9 +89,10 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 		wg:           sync.WaitGroup{},
 		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
 		redisClient:  client,
-		isLeader:     &atomic.Bool{},
-		cache:        cache.New[string, int](time.Minute, time.Minute),
-		errorChannel: make(chan error),
+		isLeader:             &atomic.Bool{},
+		cache:                cache.New[string, int](time.Minute, time.Minute),
+		errorChannel:         make(chan error),
+		lastMetricsResetTime: time.Now(), // Initialize last reset time
 	}
 	if taskRunner.cfg.ReplicationFactor == 0 {
 		taskRunner.cfg.ReplicationFactor = 1
@@ -106,6 +109,10 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 	// For Backward compatibility
 	if taskRunner.cfg.NumFetchers == 0 {
 		taskRunner.cfg.NumFetchers = cfg.BatchSize
+	}
+
+	if taskRunner.cfg.MetricsResetInterval <= 0 {
+		taskRunner.cfg.MetricsResetInterval = 24 * time.Hour // Default to 24 hours
 	}
 
 	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)

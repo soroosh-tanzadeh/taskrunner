@@ -31,4 +31,8 @@ type TaskRunnerConfig struct {
 	LongQueueThreshold time.Duration
 
 	BlockDuration time.Duration
+
+	// MetricsResetInterval defines how often timing metrics (sum and count) are reset.
+	// If zero or negative, a default of 24 hours is used.
+	MetricsResetInterval time.Duration
 }
