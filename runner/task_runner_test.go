@@ -877,6 +877,120 @@ func (t *TaskRunnerTestSuit) Test_GetTimingStatistics_ShouldReturnStatsAsExpecte
 	t.Assert().InDelta(500, timing.PerTaskTiming["task"], 5)
 }
 
+func (t *TaskRunnerTestSuit) Test_RemoteWorkerTuning_UpdatesFollowerCapacity() {
+	redisClient := t.setupRedis()
+
+	mockQueue := NewMockMessageQueue(t.T())
+	cfg := TaskRunnerConfig{
+		BatchSize:                    1,
+		ConsumerGroup:                "remote_tuning_group",
+		ConsumersPrefix:              "test",
+		NumWorkers:                   2, // used only when tuning disabled
+		MinWorkers:                   1,
+		MaxWorkers:                   10,
+		DesiredWaitTime:             100 * time.Millisecond,
+		DesiredWaitTimeTolerance:   10 * time.Millisecond,
+		LongQueueThreshold:          time.Second * 1000,
+		ReplicationFactor:           1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			return err
+		},
+	}
+
+	follower := NewTaskRunner(cfg, redisClient, mockQueue)
+	t.Require().NotNil(follower)
+
+	// Followers should keep up with leader changes, even when they are not leader.
+	follower.isLeader.Store(false)
+
+	// Initialize pool since timingAggregator is called directly in this unit test.
+	pool, err := ants.NewPoolWithFunc(2, follower.worker, ants.WithPanicHandler(func(_ interface{}) {}))
+	t.Require().NoError(err)
+	follower.workerPool = pool
+	defer follower.workerPool.Release()
+
+	// Simulate the leader writing the tuned per-instance worker capacity.
+	err = redisClient.Set(context.Background(), follower.tuningWorkersKey(), 5, time.Second*20).Err()
+	t.Require().NoError(err)
+
+	follower.timingAggregator()
+	t.Assert().Equal(5, follower.workerPool.Cap())
+}
+
+func (t *TaskRunnerTestSuit) Test_RemoteWorkerTuning_ClampsToMinMax() {
+	redisClient := t.setupRedis()
+
+	mockQueue := NewMockMessageQueue(t.T())
+	cfg := TaskRunnerConfig{
+		BatchSize:                  1,
+		ConsumerGroup:              "remote_tuning_group_clamp",
+		ConsumersPrefix:            "test",
+		NumWorkers:                 2,
+		MinWorkers:                 3,
+		MaxWorkers:                 7,
+		DesiredWaitTime:           100 * time.Millisecond,
+		DesiredWaitTimeTolerance: 10 * time.Millisecond,
+		LongQueueThreshold:        time.Second * 1000,
+		ReplicationFactor:         1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			return err
+		},
+	}
+
+	follower := NewTaskRunner(cfg, redisClient, mockQueue)
+	follower.isLeader.Store(false)
+
+	pool, err := ants.NewPoolWithFunc(2, follower.worker, ants.WithPanicHandler(func(_ interface{}) {}))
+	t.Require().NoError(err)
+	follower.workerPool = pool
+	defer follower.workerPool.Release()
+
+	// Above MaxWorkers -> clamp to MaxWorkers
+	err = redisClient.Set(context.Background(), follower.tuningWorkersKey(), 100, time.Second*20).Err()
+	t.Require().NoError(err)
+	follower.timingAggregator()
+	t.Assert().Equal(7, follower.workerPool.Cap())
+
+	// Below MinWorkers -> clamp to MinWorkers
+	err = redisClient.Set(context.Background(), follower.tuningWorkersKey(), 1, time.Second*20).Err()
+	t.Require().NoError(err)
+	follower.timingAggregator()
+	t.Assert().Equal(3, follower.workerPool.Cap())
+}
+
+func (t *TaskRunnerTestSuit) Test_RemoteWorkerTuning_MissingKey_NoChange() {
+	redisClient := t.setupRedis()
+
+	mockQueue := NewMockMessageQueue(t.T())
+	cfg := TaskRunnerConfig{
+		BatchSize:                  1,
+		ConsumerGroup:              "remote_tuning_group_missing",
+		ConsumersPrefix:            "test",
+		NumWorkers:                 2,
+		MinWorkers:                 1,
+		MaxWorkers:                 10,
+		DesiredWaitTime:           100 * time.Millisecond,
+		DesiredWaitTimeTolerance: 10 * time.Millisecond,
+		LongQueueThreshold:        time.Second * 1000,
+		ReplicationFactor:         1,
+		FailedTaskHandler: func(_ context.Context, _ TaskMessage, err error) error {
+			return err
+		},
+	}
+
+	follower := NewTaskRunner(cfg, redisClient, mockQueue)
+	follower.isLeader.Store(false)
+
+	pool, err := ants.NewPoolWithFunc(4, follower.worker, ants.WithPanicHandler(func(_ interface{}) {}))
+	t.Require().NoError(err)
+	follower.workerPool = pool
+	defer follower.workerPool.Release()
+
+	// Do not set tuningWorkersKey. Should be a no-op.
+	follower.timingAggregator()
+	t.Assert().Equal(4, follower.workerPool.Cap())
+}
+
 func (t *TaskRunnerTestSuit) Test_DispatchDelayed_ShouldStoreTaskForGivenTime() {
 	redisClient := t.setupRedis()
 	queue := redisstream.NewRedisStreamMessageQueue(redisClient, "test", "queue", time.Second*2, true)

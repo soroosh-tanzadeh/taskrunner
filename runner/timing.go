@@ -3,7 +3,9 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -24,9 +26,16 @@ func (t *TaskRunner) storeTiming(taskName string, x time.Duration) {
 // The total execution time for the queue is estimated as (T_avg * Q_len) / (W_num * R_factor).
 // If the estimated time exceeds the LongQueueThreshold, a Hook is triggered to notify the User.
 func (t *TaskRunner) timingAggregator() {
+	// If worker tuning is enabled, followers should keep up with any changes
+	// published by the current leader.
+	if t.isWorkerTuningEnabled() {
+		t.applyRemoteWorkerTuning()
+	}
+
 	if !t.IsLeader() {
 		return
 	}
+
 	stats, err := t.GetTimingStatistics()
 	if err != nil {
 		t.captureError(err)
@@ -39,6 +48,8 @@ func (t *TaskRunner) timingAggregator() {
 			t.cfg.LongQueueHook(stats)
 		}
 	}
+
+	t.tuneWorkers(stats)
 
 	// Check if MetricsResetInterval is configured and if the interval has passed
 	if t.cfg.MetricsResetInterval > 0 { // Ensure interval is positive
@@ -118,10 +129,30 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		t.captureError(err)
 		return Stats{}, nil
 	}
-	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(t.cfg.NumWorkers)) * float64(replicationFactor))
+
+	// Use the current worker pool capacity for the estimate. If the pool is nil
+	// (e.g. called before Start()), fall back to the configured NumWorkers.
+	workers := 0
+	if t.workerPool != nil {
+		workers = t.workerPool.Cap()
+	}
+	if workers <= 0 {
+		workers = t.cfg.NumWorkers
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	// Estimated queue waiting time:
+	// (T_avg * Q_len) / (W_num * replicationFactor)
+	// where W_num is the per-instance worker pool capacity.
+	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(workers) * float64(replicationFactor)))
 	tps := 0.0
 	if avgTiming != 0 {
-		tps = (float64(1000.0) / float64(avgTiming)) * float64(t.workerPool.Cap()) * float64(replicationFactor)
+		tpsWorkers := workers
+		if t.workerPool != nil {
+			tpsWorkers = t.workerPool.Cap()
+		}
+		tps = (float64(1000.0) / float64(avgTiming)) * float64(tpsWorkers) * float64(replicationFactor)
 	}
 	return Stats{
 		PerTaskTiming:     perTaskTiming,
@@ -130,6 +161,171 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 		AvgScheduleTiming: scheduleTiming,
 		TPS:               math.Round(tps),
 	}, nil
+}
+
+func (t *TaskRunner) tuneWorkers(stats Stats) {
+	if t.workerPool == nil {
+		return
+	}
+
+	if !t.isWorkerTuningEnabled() {
+		return
+	}
+
+	current := t.workerPool.Cap()
+	if current < t.cfg.MinWorkers {
+		current = t.cfg.MinWorkers
+	}
+	desiredMs := float64(t.cfg.DesiredWaitTime) / float64(time.Millisecond)
+	toleranceMs := float64(t.cfg.DesiredWaitTimeTolerance) / float64(time.Millisecond)
+	if desiredMs <= 0 {
+		return
+	}
+
+	replicationFactor, err := t.GetNumberOfReplications()
+	if err != nil || replicationFactor <= 0 {
+		replicationFactor = 1
+	}
+
+	next := computeTunedWorkers(
+		current,
+		replicationFactor,
+		t.cfg.MinWorkers,
+		t.cfg.MaxWorkers,
+		stats.PredictedWaitTime,
+		desiredMs,
+		toleranceMs,
+	)
+	if next != current {
+		t.workerPool.Tune(next)
+		t.publishWorkerCapacity(next)
+	}
+}
+
+const workerTuningTTL = time.Second * 20
+
+func (t *TaskRunner) tuningWorkersKey() string {
+	return fmt.Sprintf("taskrunner:%s:worker_tuning_capacity", t.cfg.ConsumerGroup)
+}
+
+func (t *TaskRunner) isWorkerTuningEnabled() bool {
+	return t.cfg.MinWorkers > 0 &&
+		t.cfg.MaxWorkers > 0 &&
+		t.cfg.MinWorkers <= t.cfg.MaxWorkers &&
+		t.cfg.DesiredWaitTime > 0 &&
+		t.cfg.DesiredWaitTimeTolerance >= 0
+}
+
+func (t *TaskRunner) publishWorkerCapacity(workers int) {
+	if t.redisClient == nil {
+		return
+	}
+	_ = t.redisClient.Set(context.Background(), t.tuningWorkersKey(), workers, workerTuningTTL).Err()
+}
+
+func (t *TaskRunner) applyRemoteWorkerTuning() {
+	if t.workerPool == nil || !t.isWorkerTuningEnabled() {
+		return
+	}
+
+	v, err := t.redisClient.Get(context.Background(), t.tuningWorkersKey()).Result()
+	if err != nil {
+		// Ignore missing/expired value.
+		return
+	}
+	remote, err := strconv.Atoi(v)
+	if err != nil {
+		return
+	}
+	if remote <= 0 {
+		return
+	}
+
+	// Clamp to configured bounds before applying.
+	if remote < t.cfg.MinWorkers {
+		remote = t.cfg.MinWorkers
+	}
+	if remote > t.cfg.MaxWorkers {
+		remote = t.cfg.MaxWorkers
+	}
+
+	current := t.workerPool.Cap()
+	if current != remote {
+		t.workerPool.Tune(remote)
+	}
+}
+
+func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorkers int, predictedWaitMs, desiredWaitMs, toleranceMs float64) int {
+	if currentWorkers <= 0 || minWorkers <= 0 || maxWorkers <= 0 {
+		return currentWorkers
+	}
+	if replicationFactor <= 0 {
+		replicationFactor = 1
+	}
+	if desiredWaitMs <= 0 || toleranceMs < 0 {
+		return currentWorkers
+	}
+
+	lower := desiredWaitMs - toleranceMs
+	if lower < 0 {
+		lower = 0
+	}
+	upper := desiredWaitMs + toleranceMs
+
+	// Already in band.
+	if predictedWaitMs >= lower && predictedWaitMs <= upper {
+		return currentWorkers
+	}
+
+	// Predicted wait is inversely proportional to the total worker capacity:
+	// totalWorkers = currentWorkers * replicationFactor
+	// We compute the target total workers that would bring predicted wait
+	// back to the closest boundary (lower/upper), then translate it into a
+	// per-instance capacity by dividing by replicationFactor.
+	targetWaitMs := desiredWaitMs
+	increase := predictedWaitMs > upper
+	if increase {
+		targetWaitMs = upper
+	} else {
+		targetWaitMs = lower
+	}
+
+	if targetWaitMs <= 0 {
+		return currentWorkers
+	}
+
+	currentTotalWorkers := float64(currentWorkers * replicationFactor)
+	desiredTotalWorkers := currentTotalWorkers * (predictedWaitMs / targetWaitMs)
+
+	var nextTotal int
+	if increase {
+		nextTotal = int(math.Ceil(desiredTotalWorkers))
+	} else {
+		nextTotal = int(math.Floor(desiredTotalWorkers))
+	}
+	if nextTotal <= 0 {
+		nextTotal = 1
+	}
+
+	// Convert total workers back into per-instance worker capacity.
+	var next int
+	if increase {
+		next = int(math.Ceil(float64(nextTotal) / float64(replicationFactor)))
+	} else {
+		next = int(math.Floor(float64(nextTotal) / float64(replicationFactor)))
+	}
+
+	if next < minWorkers {
+		next = minWorkers
+	}
+	if next > maxWorkers {
+		next = maxWorkers
+	}
+	if next <= 0 {
+		next = minWorkers
+	}
+
+	return next
 }
 
 func (t *TaskRunner) resetTimingMetrics() {
