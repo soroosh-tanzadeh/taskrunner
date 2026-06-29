@@ -83,12 +83,12 @@ type TaskRunner struct {
 
 func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.MessageQueue) *TaskRunner {
 	taskRunner := &TaskRunner{
-		cfg:          cfg,
-		queue:        queue,
-		tasks:        safemap.NewSafeMap[string, *Task](),
-		wg:           sync.WaitGroup{},
-		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
-		redisClient:  client,
+		cfg:                  cfg,
+		queue:                queue,
+		tasks:                safemap.NewSafeMap[string, *Task](),
+		wg:                   sync.WaitGroup{},
+		metricsHash:          metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
+		redisClient:          client,
 		isLeader:             &atomic.Bool{},
 		cache:                cache.New[string, int](time.Minute, time.Minute),
 		errorChannel:         make(chan error),
@@ -148,21 +148,8 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 	// Span workers to start consuming messages. If tuning is enabled, use MinWorkers as
 	// the initial capacity (clamped to MaxWorkers).
 	initialWorkers := t.cfg.NumWorkers
-	tuningEnabled := t.cfg.MinWorkers > 0 &&
-		t.cfg.MaxWorkers > 0 &&
-		t.cfg.MinWorkers <= t.cfg.MaxWorkers &&
-		t.cfg.DesiredWaitTime > 0 &&
-		t.cfg.DesiredWaitTimeTolerance >= 0
-	if tuningEnabled {
-		if initialWorkers < t.cfg.MinWorkers {
-			initialWorkers = t.cfg.MinWorkers
-		}
-		if initialWorkers > t.cfg.MaxWorkers {
-			initialWorkers = t.cfg.MaxWorkers
-		}
-		if initialWorkers <= 0 {
-			initialWorkers = t.cfg.MinWorkers
-		}
+	if t.isWorkerTuningEnabled() {
+		initialWorkers = t.cfg.MinWorkers
 	}
 
 	pool, err := ants.NewPoolWithFunc(initialWorkers, t.worker, ants.WithPanicHandler(t.workerPanicHandler))
