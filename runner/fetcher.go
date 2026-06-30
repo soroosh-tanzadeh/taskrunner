@@ -49,7 +49,45 @@ func (t *TaskRunner) fetchMessage(ctx context.Context, fetcherID int) {
 	if blockDuration == 0 {
 		blockDuration = time.Second * 5
 	}
+
+	batchSizeLastUpdate := time.Time{}
+	var poolFreeCapacity int
+
+	shouldUpdateBatchSize := func() (bool, int) {
+		poolFreeCapacity = t.workerPool.Free()
+
+		if time.Since(batchSizeLastUpdate) < time.Duration(t.cfg.TuningCooldownSeconds)*time.Second {
+			return false, batchSize
+		}
+
+		if poolFreeCapacity < t.cfg.BatchSize {
+			return false, batchSize
+		}
+
+		lowerBand := poolFreeCapacity - t.cfg.BatchSize
+		upperBand := poolFreeCapacity + t.cfg.BatchSize
+
+		if (batchSize < lowerBand || batchSize > upperBand) && (poolFreeCapacity > t.cfg.BatchSize) {
+			batchSizeLastUpdate = time.Now()
+			return true, poolFreeCapacity
+		} else if poolFreeCapacity <= t.cfg.BatchSize {
+			return batchSize != t.cfg.BatchSize, t.cfg.BatchSize
+		}
+
+		return false, batchSize
+	}
+
+	var updated bool
 	for {
+		if t.isWorkerTuningEnabled() {
+			updated, batchSize = shouldUpdateBatchSize()
+			if updated {
+				log.WithFields(log.Fields{
+					"new_batch_size": batchSize,
+				}).Info("batch_size updated")
+			}
+		}
+
 		if ctx.Err() != nil {
 			return
 		}

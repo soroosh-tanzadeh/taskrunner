@@ -79,6 +79,10 @@ type TaskRunner struct {
 	host string
 
 	lastMetricsResetTime time.Time // Stores the timestamp of the last metrics reset
+
+	// lastWorkerTuningChangeAt stores the unix nano timestamp of the last
+	// actual worker pool capacity change (local tuning or remote apply).
+	lastWorkerTuningChangeAt atomic.Int64
 }
 
 func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.MessageQueue) *TaskRunner {
@@ -113,6 +117,11 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 
 	if taskRunner.cfg.MetricsResetInterval <= 0 {
 		taskRunner.cfg.MetricsResetInterval = 24 * time.Hour // Default to 24 hours
+	}
+
+	// Default cooldown to avoid capacity churn.
+	if taskRunner.cfg.TuningCooldownSeconds <= 0 {
+		taskRunner.cfg.TuningCooldownSeconds = 10
 	}
 
 	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	log "github.com/sirupsen/logrus"
 )
 
 type timingDto struct {
@@ -28,7 +29,8 @@ func (t *TaskRunner) storeTiming(taskName string, x time.Duration) {
 func (t *TaskRunner) timingAggregator() {
 	// If worker tuning is enabled, followers should keep up with any changes
 	// published by the current leader.
-	if t.isWorkerTuningEnabled() {
+	tuningEnabled := t.isWorkerTuningEnabled()
+	if tuningEnabled {
 		t.applyRemoteWorkerTuning()
 	}
 
@@ -42,14 +44,16 @@ func (t *TaskRunner) timingAggregator() {
 		return
 	}
 
+	if tuningEnabled {
+		t.tuneWorkers(stats)
+	}
+
 	if time.Duration(stats.PredictedWaitTime*float64(time.Millisecond)) > t.cfg.LongQueueThreshold {
 		// LongQueueThreshold exceed, notify the developer
 		if t.cfg.LongQueueHook != nil {
 			t.cfg.LongQueueHook(stats)
 		}
 	}
-
-	t.tuneWorkers(stats)
 
 	// Check if MetricsResetInterval is configured and if the interval has passed
 	if t.cfg.MetricsResetInterval > 0 { // Ensure interval is positive
@@ -168,8 +172,17 @@ func (t *TaskRunner) tuneWorkers(stats Stats) {
 		return
 	}
 
-	if !t.isWorkerTuningEnabled() {
-		return
+	// Cooldown: avoid recomputing capacity too frequently after the last
+	// actual capacity change.
+	cooldown := time.Duration(t.cfg.TuningCooldownSeconds) * time.Second
+	if cooldown > 0 {
+		lastUnixNano := t.lastWorkerTuningChangeAt.Load()
+		if lastUnixNano != 0 {
+			lastChangeAt := time.Unix(0, lastUnixNano)
+			if time.Since(lastChangeAt) < cooldown {
+				return
+			}
+		}
 	}
 
 	current := t.workerPool.Cap()
@@ -187,7 +200,7 @@ func (t *TaskRunner) tuneWorkers(stats Stats) {
 		replicationFactor = 1
 	}
 
-	next := computeTunedWorkers(
+	next, reason := computeTunedWorkers(
 		current,
 		replicationFactor,
 		t.cfg.MinWorkers,
@@ -198,7 +211,19 @@ func (t *TaskRunner) tuneWorkers(stats Stats) {
 	)
 	if next != current {
 		t.workerPool.Tune(next)
-		t.publishWorkerCapacity(next)
+		t.lastWorkerTuningChangeAt.Store(time.Now().UnixNano())
+		oldTotal := current * replicationFactor
+		newTotal := next * replicationFactor
+		log.WithFields(log.Fields{
+			"old_total":             oldTotal,
+			"new_total":             newTotal,
+			"old_predicted_wait_ms": stats.PredictedWaitTime,
+			"reason":                reason,
+		}).Info("worker pool tuned")
+
+		if t.IsLeader() {
+			t.publishWorkerCapacity(next)
+		}
 	}
 }
 
@@ -220,7 +245,7 @@ func (t *TaskRunner) publishWorkerCapacity(workers int) {
 	if t.redisClient == nil {
 		return
 	}
-	_ = t.redisClient.Set(context.Background(), t.tuningWorkersKey(), workers, workerTuningTTL).Err()
+	_ = t.redisClient.Set(context.Background(), t.tuningWorkersKey(), workers, max(workerTuningTTL, t.cfg.LongQueueThreshold)).Err()
 }
 
 func (t *TaskRunner) applyRemoteWorkerTuning() {
@@ -252,18 +277,27 @@ func (t *TaskRunner) applyRemoteWorkerTuning() {
 	current := t.workerPool.Cap()
 	if current != remote {
 		t.workerPool.Tune(remote)
+		t.lastWorkerTuningChangeAt.Store(time.Now().UnixNano())
+		return
 	}
+
+	return
 }
 
-func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorkers int, predictedWaitMs, desiredWaitMs, toleranceMs float64) int {
+func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorkers int, predictedWaitMs, desiredWaitMs, toleranceMs float64) (int, string) {
 	if currentWorkers <= 0 || minWorkers <= 0 || maxWorkers <= 0 {
-		return currentWorkers
+		return currentWorkers, "invalid_inputs"
 	}
 	if replicationFactor <= 0 {
 		replicationFactor = 1
 	}
 	if desiredWaitMs <= 0 || toleranceMs < 0 {
-		return currentWorkers
+		return currentWorkers, "invalid_wait_params"
+	}
+
+	// When the queue is empty, predicted wait can hit 0.
+	if predictedWaitMs <= 0 {
+		return minWorkers, "predicted_wait_zero"
 	}
 
 	lower := desiredWaitMs - toleranceMs
@@ -274,47 +308,52 @@ func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorke
 
 	// Already in band.
 	if predictedWaitMs >= lower && predictedWaitMs <= upper {
-		return currentWorkers
+		return currentWorkers, "in_tolerance_band"
 	}
 
-	// Predicted wait is inversely proportional to the total worker capacity:
-	// totalWorkers = currentWorkers * replicationFactor
-	// We compute the target total workers that would bring predicted wait
-	// back to the closest boundary (lower/upper), then translate it into a
-	// per-instance capacity by dividing by replicationFactor.
+	// For large deviations, tune towards the center (desired wait), not just the
+	// nearest band boundary.
+	extendedLower := desiredWaitMs * 0.5
+	extendedUpper := desiredWaitMs * 1.5
+
 	targetWaitMs := desiredWaitMs
+	targetReason := "boundary_tuning"
+
 	increase := predictedWaitMs > upper
 	if increase {
-		targetWaitMs = upper
+		if predictedWaitMs > extendedUpper {
+			targetWaitMs = desiredWaitMs
+			targetReason = "deviation_large_above_center"
+		} else {
+			targetWaitMs = upper
+			targetReason = "above_upper_boundary"
+		}
 	} else {
-		targetWaitMs = lower
+		// decrease
+		if predictedWaitMs < extendedLower {
+			targetWaitMs = desiredWaitMs
+			targetReason = "deviation_large_below_center"
+		} else {
+			targetWaitMs = lower
+			targetReason = "below_lower_boundary"
+		}
 	}
 
 	if targetWaitMs <= 0 {
-		return currentWorkers
+		return currentWorkers, "target_wait_nonpositive"
 	}
 
 	currentTotalWorkers := float64(currentWorkers * replicationFactor)
 	desiredTotalWorkers := currentTotalWorkers * (predictedWaitMs / targetWaitMs)
 
-	var nextTotal int
-	if increase {
-		nextTotal = int(math.Ceil(desiredTotalWorkers))
-	} else {
-		nextTotal = int(math.Floor(desiredTotalWorkers))
-	}
+	// Symmetric rounding reduces oscillation risk when replicationFactor > 1.
+	nextTotal := int(math.Round(desiredTotalWorkers))
 	if nextTotal <= 0 {
 		nextTotal = 1
 	}
 
 	// Convert total workers back into per-instance worker capacity.
-	var next int
-	if increase {
-		next = int(math.Ceil(float64(nextTotal) / float64(replicationFactor)))
-	} else {
-		next = int(math.Floor(float64(nextTotal) / float64(replicationFactor)))
-	}
-
+	next := int(math.Round(float64(nextTotal) / float64(replicationFactor)))
 	if next < minWorkers {
 		next = minWorkers
 	}
@@ -325,7 +364,7 @@ func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorke
 		next = minWorkers
 	}
 
-	return next
+	return next, targetReason
 }
 
 func (t *TaskRunner) resetTimingMetrics() {
