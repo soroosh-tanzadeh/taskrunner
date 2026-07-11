@@ -79,16 +79,20 @@ type TaskRunner struct {
 	host string
 
 	lastMetricsResetTime time.Time // Stores the timestamp of the last metrics reset
+
+	// lastWorkerTuningChangeAt stores the unix nano timestamp of the last
+	// actual worker pool capacity change (local tuning or remote apply).
+	lastWorkerTuningChangeAt atomic.Int64
 }
 
 func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.MessageQueue) *TaskRunner {
 	taskRunner := &TaskRunner{
-		cfg:          cfg,
-		queue:        queue,
-		tasks:        safemap.NewSafeMap[string, *Task](),
-		wg:           sync.WaitGroup{},
-		metricsHash:  metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
-		redisClient:  client,
+		cfg:                  cfg,
+		queue:                queue,
+		tasks:                safemap.NewSafeMap[string, *Task](),
+		wg:                   sync.WaitGroup{},
+		metricsHash:          metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
+		redisClient:          client,
 		isLeader:             &atomic.Bool{},
 		cache:                cache.New[string, int](time.Minute, time.Minute),
 		errorChannel:         make(chan error),
@@ -113,6 +117,11 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 
 	if taskRunner.cfg.MetricsResetInterval <= 0 {
 		taskRunner.cfg.MetricsResetInterval = 24 * time.Hour // Default to 24 hours
+	}
+
+	// Default cooldown to avoid capacity churn.
+	if taskRunner.cfg.TuningCooldownSeconds <= 0 {
+		taskRunner.cfg.TuningCooldownSeconds = 10
 	}
 
 	taskRunner.tasksTimingBulkWriter = NewBulkWriter(time.Second, taskRunner.timingFlush)
@@ -145,8 +154,14 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 		return ErrRaceOccuredOnStart
 	}
 
-	// Span n workers to start consuming messages
-	pool, err := ants.NewPoolWithFunc(t.cfg.NumWorkers, t.worker, ants.WithPanicHandler(t.workerPanicHandler))
+	// Span workers to start consuming messages. If tuning is enabled, use MinWorkers as
+	// the initial capacity (clamped to MaxWorkers).
+	initialWorkers := t.cfg.NumWorkers
+	if t.isWorkerTuningEnabled() {
+		initialWorkers = t.cfg.MinWorkers
+	}
+
+	pool, err := ants.NewPoolWithFunc(initialWorkers, t.worker, ants.WithPanicHandler(t.workerPanicHandler))
 	if err != nil {
 		return err
 	}
