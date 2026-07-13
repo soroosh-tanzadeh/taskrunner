@@ -1,6 +1,13 @@
 package runner
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
+	"github.com/soroosh-tanzadeh/taskrunner/contracts"
+)
 
 func TestComputeTunedWorkers_InBand_ReturnsCurrent(t *testing.T) {
 	current := 10
@@ -198,5 +205,59 @@ func TestComputeTunedWorkers_InvalidInputs_NegativeTolerance(t *testing.T) {
 func BenchmarkComputeTunedWorkers(b *testing.B) {
 	for b.Loop() {
 		_, _ = computeTunedWorkers(20, 3, 1, 100, 250, 100, 10)
+	}
+}
+
+func TestTimingAggregator_FollowerResetsLocalTime(t *testing.T) {
+	s, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer s.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+
+	cfg := TaskRunnerConfig{
+		ConsumerGroup:        "test-group",
+		MetricsResetInterval: 10 * time.Millisecond,
+	}
+	tr := NewTaskRunner(cfg, rdb, nil)
+	tr.isLeader.Store(false)
+	initialResetTime := tr.lastMetricsResetTime
+	time.Sleep(15 * time.Millisecond)
+	tr.timingAggregator()
+
+	if !tr.lastMetricsResetTime.After(initialResetTime) {
+		t.Errorf("expected lastMetricsResetTime to be updated for followers, but it wasn't")
+	}
+}
+
+type fallbackMockQueue struct {
+	contracts.MessageQueue
+}
+
+func (m *fallbackMockQueue) Len() (int64, error) {
+	return 100, nil
+}
+func TestGetTimingStatistics_FallbackWhenAvgTimingIsZero(t *testing.T) {
+	s, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer s.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	mockQueue := &fallbackMockQueue{}
+	cfg := TaskRunnerConfig{
+		ConsumerGroup: "test-group",
+		NumWorkers:    10,
+	}
+	tr := NewTaskRunner(cfg, rdb, mockQueue)
+
+	tr.RegisterTask(&Task{Name: "test_task"})
+	stats, err := tr.GetTimingStatistics()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.PredictedWaitTime <= 0 {
+		t.Errorf("expected PredictedWaitTime to be greater than 0 when queue has tasks, got %f", stats.PredictedWaitTime)
 	}
 }
