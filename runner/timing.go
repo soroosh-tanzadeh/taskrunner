@@ -34,6 +34,16 @@ func (t *TaskRunner) timingAggregator() {
 		t.applyRemoteWorkerTuning()
 	}
 
+	// Check metric resets for all instances.
+	if t.cfg.MetricsResetInterval > 0 {
+		if time.Since(t.lastMetricsResetTime) > t.cfg.MetricsResetInterval {
+			if t.IsLeader() {
+				t.resetTimingMetrics()
+			}
+			t.lastMetricsResetTime = time.Now()
+		}
+	}
+
 	if !t.IsLeader() {
 		return
 	}
@@ -149,7 +159,13 @@ func (t *TaskRunner) GetTimingStatistics() (Stats, error) {
 	// Estimated queue waiting time:
 	// (T_avg * Q_len) / (W_num * replicationFactor)
 	// where W_num is the per-instance worker pool capacity.
-	predictedWaitTime := ((float64(avgTiming) * float64(queueLen)) / (float64(workers) * float64(replicationFactor)))
+
+	// If queue has items but no timing data, fallback to 1ms to avoid dropping workers.
+	effectiveAvgTiming := float64(avgTiming)
+	if queueLen > 0 && effectiveAvgTiming == 0 {
+		effectiveAvgTiming = 1.0 // Fallback to 1ms to avoid dropping workers on empty metrics
+	}
+	predictedWaitTime := ((effectiveAvgTiming * float64(queueLen)) / (float64(workers) * float64(replicationFactor)))
 	tps := 0.0
 	if avgTiming != 0 {
 		tpsWorkers := workers
