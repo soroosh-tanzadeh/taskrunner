@@ -197,10 +197,9 @@ TaskRunner is configured via `runner.TaskRunnerConfig`:
 - **NumFetchers** -- Concurrent fetchers reading from the stream (each reads
   `BatchSize`).
 - **FailedTaskHandler** -- callback when a task exhausts retries.
-- **LongQueueHook** -- periodic timing/queue stats callback; frequency set by
-  `LongQueueThreshold`.
+- **LongQueueHook** -- callback when a queue exceeds `LongQueueThreshold`.
 - **LongQueueThreshold** -- duration that influences the cadence of timing
-  aggregation (every `threshold/2`).
+  aggregation (every `threshold/2`) and `LongQueueHook`.
 - **BlockDuration** -- stream read block duration (defaults to 5s).
 - **MetricsResetInterval** -- interval to reset timing metrics (default 24h; set
   0 to disable).
@@ -239,7 +238,8 @@ To tune in practice:
    load; `MaxWorkers` protects your CPU/memory budget during spikes.
 4. **Control reaction speed** -- tuning runs on the timing aggregator loop
    (every `LongQueueThreshold/2`, or every 1 minute if unset).
-5. **Watch `LongQueueHook`** -- validate that predicted wait time stays in band.
+5. **Watch `PredictedWaitTime`** -- validate that predicted wait time stays in
+   band.
 
 ```go
 tr := runner.NewTaskRunner(runner.TaskRunnerConfig{
