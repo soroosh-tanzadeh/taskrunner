@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -88,10 +89,10 @@ func TestComputeTunedWorkers_ZeroTolerance_SinglePointBand(t *testing.T) {
 	}
 }
 
-func TestComputeTunedWorkers_PredictedWaitZero_ReturnsToMin(t *testing.T) {
+func TestComputeTunedWorkers_PredictedWaitZero_ReduceBy10Percent(t *testing.T) {
 	current := 15
 	next, reason := computeTunedWorkers(current, 2, 10, 20, 0, 100, 10)
-	if next != 10 {
+	if next != int(math.Max(float64(10), float64(current)*0.9)) {
 		t.Fatalf("expected %d, got %d", 10, next)
 	}
 	if reason != "predicted_wait_zero" {
@@ -205,6 +206,48 @@ func TestComputeTunedWorkers_InvalidInputs_NegativeTolerance(t *testing.T) {
 func BenchmarkComputeTunedWorkers(b *testing.B) {
 	for b.Loop() {
 		_, _ = computeTunedWorkers(20, 3, 1, 100, 250, 100, 10)
+	}
+}
+
+// BenchmarkComputeTunedWorkers_Scenarios exercises the worker-tuning pure
+// function across the main branches it takes in production: in-band (no-op),
+// boundary tuning (small deviations), large deviation (tune to center), and
+// the predicted-wait-zero scale-down path. Each sub-benchmark reports
+// independently so regressions in a specific branch are visible.
+func BenchmarkComputeTunedWorkers_Scenarios(b *testing.B) {
+	scenarios := []struct {
+		name              string
+		currentWorkers    int
+		replicationFactor int
+		minWorkers        int
+		maxWorkers        int
+		predictedWaitMs   float64
+		desiredWaitMs     float64
+		toleranceMs       float64
+	}{
+		{"in_tolerance_band", 10, 1, 1, 100, 100, 100, 10},
+		{"above_upper_boundary", 10, 1, 1, 100, 120, 100, 10},
+		{"below_lower_boundary", 10, 1, 1, 100, 80, 100, 10},
+		{"deviation_large_above_center", 10, 1, 1, 100, 151, 100, 10},
+		{"deviation_large_below_center", 10, 1, 1, 100, 49, 100, 10},
+		{"predicted_wait_zero", 15, 2, 10, 20, 0, 100, 10},
+		{"clamp_to_max", 50, 2, 10, 60, 1_000_000, 100, 0},
+		{"high_replication", 20, 8, 4, 100, 250, 100, 10},
+	}
+	for _, sc := range scenarios {
+		b.Run(sc.name, func(b *testing.B) {
+			for b.Loop() {
+				_, _ = computeTunedWorkers(
+					sc.currentWorkers,
+					sc.replicationFactor,
+					sc.minWorkers,
+					sc.maxWorkers,
+					sc.predictedWaitMs,
+					sc.desiredWaitMs,
+					sc.toleranceMs,
+				)
+			}
+		})
 	}
 }
 

@@ -1026,6 +1026,11 @@ func (t *TaskRunnerTestSuit) Test_EndToEnd_LoadTest_WorkerTuningAdjustsWithinRan
 	startErrCh := make(chan error, 1)
 	go func() { startErrCh <- taskRunner.Start(ctx) }()
 
+	// Wait for workerPool to be initialized
+	<-time.After(time.Millisecond * 100)
+	taskRunner.startLock.Lock()
+	time.AfterFunc(time.Millisecond*100, func() { taskRunner.startLock.Unlock() })
+
 	// Start initializes workerPool early, but wait briefly to avoid races.
 	deadline := time.Now().Add(3 * time.Second)
 	for taskRunner.workerPool == nil {
@@ -1047,7 +1052,7 @@ func (t *TaskRunnerTestSuit) Test_EndToEnd_LoadTest_WorkerTuningAdjustsWithinRan
 		err := taskRunner.Dispatch(ctx, "task", i)
 		t.Require().NoError(err)
 	}
-	time.Sleep(2 * time.Second)
+	<-time.After(2 * time.Second)
 
 	capAfterHigh := taskRunner.workerPool.Cap()
 	t.Assert().GreaterOrEqual(capAfterHigh, taskRunner.cfg.MinWorkers)

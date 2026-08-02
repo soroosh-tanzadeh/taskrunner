@@ -64,6 +64,10 @@ func (t *TaskRunner) worker(i interface{}) {
 	messagePayload := m.Payload
 
 	handleFailedTask := func(ctx context.Context, taskMessage TaskMessage, err error) {
+		if t.cfg.FailedTaskHandler == nil {
+			return
+		}
+
 		if err := t.cfg.FailedTaskHandler(ctx, taskMessage, err); err != nil {
 			log.WithError(err).Error()
 		} else {

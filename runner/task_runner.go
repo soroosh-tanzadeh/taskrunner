@@ -50,7 +50,8 @@ type TaskRunner struct {
 
 	isLeader *atomic.Bool
 
-	status atomic.Uint64
+	status    atomic.Uint64
+	startLock *sync.Mutex
 
 	tasks *safemap.SafeMap[string, *Task]
 
@@ -90,6 +91,7 @@ func NewTaskRunner(cfg TaskRunnerConfig, client *redis.Client, queue contracts.M
 		cfg:                  cfg,
 		queue:                queue,
 		tasks:                safemap.NewSafeMap[string, *Task](),
+		startLock:            &sync.Mutex{},
 		wg:                   sync.WaitGroup{},
 		metricsHash:          metricsKeyPrefix + cfg.ConsumerGroup + ":metrics",
 		redisClient:          client,
@@ -147,10 +149,18 @@ func (t *TaskRunner) captureError(err error) {
 }
 
 func (t *TaskRunner) Start(ctx context.Context) error {
+	t.startLock.Lock()
+
 	if t.status.Load() != stateInit {
+		// Unlock in case any error occurs
+		t.startLock.Unlock()
+
 		return ErrTaskRunnerAlreadyStarted
 	}
 	if !t.status.CompareAndSwap(stateInit, stateStarting) {
+		// Unlock in case any error occurs
+		t.startLock.Unlock()
+
 		return ErrRaceOccuredOnStart
 	}
 
@@ -163,9 +173,15 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 
 	pool, err := ants.NewPoolWithFunc(initialWorkers, t.worker, ants.WithPanicHandler(t.workerPanicHandler))
 	if err != nil {
+		// Unlock in case any error occurs
+		t.startLock.Unlock()
+
 		return err
 	}
 	t.workerPool = pool
+
+	// Unlock before starting fetchers
+	t.startLock.Unlock()
 
 	for fetcherID := 1; fetcherID <= t.cfg.NumFetchers; fetcherID++ {
 		t.wg.Add(1)
@@ -205,7 +221,7 @@ func (t *TaskRunner) Start(ctx context.Context) error {
 	}()
 
 	if !t.status.CompareAndSwap(stateStarting, stateStarted) {
-		panic(ErrRaceOccuredOnStart)
+		return ErrRaceOccuredOnStart
 	}
 
 	t.StartElection(ctx)
