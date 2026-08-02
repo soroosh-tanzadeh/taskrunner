@@ -12,13 +12,13 @@ Automatic worker tuning · Per-task timing metrics
 [![Go](https://github.com/soroosh-tanzadeh/taskrunner/actions/workflows/go.yml/badge.svg)](https://github.com/soroosh-tanzadeh/taskrunner/actions/workflows/go.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
-📚 **[Documentation](https://soroosh-tanzadeh.github.io/taskrunner-documents)**
+📚 **[Documentation](https://soroosh-tanzadeh.github.io/taskrunner-documents/)**
 · 🚀
-**[Getting Started](https://soroosh-tanzadeh.github.io/taskrunner-documentsgetting-started/)**
+**[Getting Started](https://soroosh-tanzadeh.github.io/taskrunner-documents/getting-started/)**
 · 🔧
-**[API Reference](https://soroosh-tanzadeh.github.io/taskrunner-documentsapi-reference/)**
+**[API Reference](https://soroosh-tanzadeh.github.io/taskrunner-documents/api-reference/)**
 · 📊
-**[Benchmarks](https://soroosh-tanzadeh.github.io/taskrunner-documentsbenchmarks/)**
+**[Benchmarks](https://soroosh-tanzadeh.github.io/taskrunner-documents/benchmarks/)**
 
 </div>
 
@@ -124,7 +124,7 @@ func main() {
 ```
 
 ➡️
-**[Full Getting Started guide →](https://soroosh-tanzadeh.github.io/taskrunner-documentsgetting-started/)**
+**[Full Getting Started guide →](https://soroosh-tanzadeh.github.io/taskrunner-documents/getting-started/)**
 
 ## Delayed Task Scheduler
 
@@ -152,7 +152,7 @@ Notes:
   absolute time.
 
 ➡️
-**[Delayed Scheduling concepts →](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/delayed-scheduling/)**
+**[Delayed Scheduling concepts →](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/delayed-scheduling/)**
 
 ## Unique Jobs
 
@@ -176,7 +176,7 @@ err := tr.Dispatch(context.Background(), "sendEmail", "order-123")
 ```
 
 ➡️
-**[Unique Jobs concepts →](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/unique-jobs/)**
+**[Unique Jobs concepts →](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/unique-jobs/)**
 
 ## Configuration
 
@@ -217,7 +217,7 @@ Redis Stream queue configuration via options on
 - `WithRedisVersion(version string)` -- override auto-detected version.
 
 ➡️
-**[Full Configuration Reference →](https://soroosh-tanzadeh.github.io/taskrunner-documentsguides/configuration/)**
+**[Full Configuration Reference →](https://soroosh-tanzadeh.github.io/taskrunner-documents/guides/configuration/)**
 
 ## Worker tuning tips (PredictedWaitTime)
 
@@ -253,7 +253,7 @@ tr := runner.NewTaskRunner(runner.TaskRunnerConfig{
 ```
 
 ➡️
-**[Worker Tuning concepts →](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/worker-tuning/)**
+**[Worker Tuning concepts →](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/worker-tuning/)**
 
 ## Examples
 
@@ -283,31 +283,31 @@ go test -run '^$' -bench '.' ./runner/... ./internal/ring/...
 ```
 
 ➡️
-**[Benchmarks →](https://soroosh-tanzadeh.github.io/taskrunner-documentsbenchmarks/)**
+**[Benchmarks →](https://soroosh-tanzadeh.github.io/taskrunner-documents/benchmarks/)**
 
 ## Documentation
 
 The full documentation is hosted at
-**<https://soroosh-tanzadeh.github.io/taskrunner-documents>** and is built with
+**<https://soroosh-tanzadeh.github.io/taskrunner-documents/>** and is built with
 MkDocs Material. It covers:
 
 - **Concepts** --
-  [Architecture](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/architecture/),
-  [Leader Election](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/leader-election/),
-  [Fetchers & Workers](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/fetchers-workers/),
-  [Unique Jobs](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/unique-jobs/),
-  [Delayed Scheduling](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/delayed-scheduling/),
-  [Worker Tuning](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/worker-tuning/),
-  [Timing Metrics](https://soroosh-tanzadeh.github.io/taskrunner-documentsconcepts/metrics/).
+  [Architecture](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/architecture/),
+  [Leader Election](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/leader-election/),
+  [Fetchers & Workers](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/fetchers-workers/),
+  [Unique Jobs](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/unique-jobs/),
+  [Delayed Scheduling](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/delayed-scheduling/),
+  [Worker Tuning](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/worker-tuning/),
+  [Timing Metrics](https://soroosh-tanzadeh.github.io/taskrunner-documents/concepts/metrics/).
 - **Guides** --
-  [Configuration](https://soroosh-tanzadeh.github.io/taskrunner-documentsguides/configuration/),
-  [Error Handling](https://soroosh-tanzadeh.github.io/taskrunner-documentsguides/error-handling/),
-  [Observability](https://soroosh-tanzadeh.github.io/taskrunner-documentsguides/observability/),
-  [Deployment](https://soroosh-tanzadeh.github.io/taskrunner-documentsguides/deployment/),
-  [Redis Key Layout](https://soroosh-tanzadeh.github.io/taskrunner-documentsguides/redis-layout/).
+  [Configuration](https://soroosh-tanzadeh.github.io/taskrunner-documents/guides/configuration/),
+  [Error Handling](https://soroosh-tanzadeh.github.io/taskrunner-documents/guides/error-handling/),
+  [Observability](https://soroosh-tanzadeh.github.io/taskrunner-documents/guides/observability/),
+  [Deployment](https://soroosh-tanzadeh.github.io/taskrunner-documents/guides/deployment/),
+  [Redis Key Layout](https://soroosh-tanzadeh.github.io/taskrunner-documents/guides/redis-layout/).
 - **Reference** --
-  [API](https://soroosh-tanzadeh.github.io/taskrunner-documentsapi-reference/),
-  [Benchmarks](https://soroosh-tanzadeh.github.io/taskrunner-documentsbenchmarks/).
+  [API](https://soroosh-tanzadeh.github.io/taskrunner-documents/api-reference/),
+  [Benchmarks](https://soroosh-tanzadeh.github.io/taskrunner-documents/benchmarks/).
 
 To preview the docs locally:
 
@@ -326,7 +326,7 @@ Contributions are welcome! Please:
 - Follow idiomatic Go style and **keep APIs small and focused**.
 
 ➡️
-**[Contributing guide →](https://soroosh-tanzadeh.github.io/taskrunner-documentscontributing/)**
+**[Contributing guide →](https://soroosh-tanzadeh.github.io/taskrunner-documents/contributing/)**
 · [`AGENTS.md`](AGENTS.md) for AI coding agents.
 
 ## License
