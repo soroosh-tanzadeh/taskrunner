@@ -296,8 +296,6 @@ func (t *TaskRunner) applyRemoteWorkerTuning() {
 		t.lastWorkerTuningChangeAt.Store(time.Now().UnixNano())
 		return
 	}
-
-	return
 }
 
 func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorkers int, predictedWaitMs, desiredWaitMs, toleranceMs float64) (int, string) {
@@ -313,6 +311,12 @@ func computeTunedWorkers(currentWorkers, replicationFactor, minWorkers, maxWorke
 
 	// When the queue is empty, predicted wait can hit 0.
 	if predictedWaitMs <= 0 {
+		// In this case reduce the number of workers by 10% on each iteration.
+		newWorkers := int(float64(currentWorkers) * 0.9)
+		if currentWorkers > minWorkers && newWorkers > minWorkers {
+			return newWorkers, "predicted_wait_zero"
+		}
+
 		return minWorkers, "predicted_wait_zero"
 	}
 
